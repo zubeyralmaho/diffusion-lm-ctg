@@ -19,7 +19,10 @@ def _device() -> str:
 
 
 def gen_gpt2(cfg: dict, examples) -> list[str]:
-    ckpt = cfg["train"]["output_dir"]
+    # When --pretrained is passed we skip the fine-tuned checkpoint and load
+    # the base model named in cfg.model.pretrained. Useful as an untrained
+    # sanity baseline before any training has been run.
+    ckpt = cfg["model"]["pretrained"] if cfg.get("_use_pretrained") else cfg["train"]["output_dir"]
     tok = AutoTokenizer.from_pretrained(ckpt)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
@@ -43,7 +46,7 @@ def gen_gpt2(cfg: dict, examples) -> list[str]:
 
 
 def gen_t5(cfg: dict, examples) -> list[str]:
-    ckpt = cfg["train"]["output_dir"]
+    ckpt = cfg["model"]["pretrained"] if cfg.get("_use_pretrained") else cfg["train"]["output_dir"]
     tok = AutoTokenizer.from_pretrained(ckpt)
     model = T5ForConditionalGeneration.from_pretrained(ckpt).to(_device()).eval()
     g = cfg["generate"]
@@ -112,9 +115,19 @@ def main() -> None:
     parser.add_argument("--split", default="test")
     parser.add_argument("--out", required=True)
     parser.add_argument("--limit", type=int, default=None, help="Cap examples for quick debug")
+    parser.add_argument(
+        "--pretrained",
+        action="store_true",
+        help="Skip the fine-tuned checkpoint and use the base pretrained model "
+             "named in cfg.model.pretrained. Only valid for gpt2 / t5.",
+    )
     args = parser.parse_args()
 
     cfg = yaml.safe_load(open(args.config))
+    if args.pretrained:
+        if cfg["model"]["type"] == "diffusion_lm":
+            raise SystemExit("--pretrained is only meaningful for gpt2 / t5 baselines.")
+        cfg["_use_pretrained"] = True
     examples = list(load_e2e(args.split))
     if args.limit:
         examples = examples[: args.limit]
