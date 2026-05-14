@@ -1,11 +1,98 @@
-"""Generation entrypoint. Writes JSONL of {mr, slots, prediction, reference}."""
+"""Generation entrypoint. Writes JSONL of {mr_text, slots, prediction, reference}."""
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
 
+import torch
 import yaml
+from tqdm import tqdm
+from transformers import AutoTokenizer, GPT2LMHeadModel, T5ForConditionalGeneration
+
+from src.data.e2e import load_e2e
+from src.models.diffusion_lm import DiffusionLM
+
+
+def _device() -> str:
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def gen_gpt2(cfg: dict, examples) -> list[str]:
+    ckpt = cfg["train"]["output_dir"]
+    tok = AutoTokenizer.from_pretrained(ckpt)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    model = GPT2LMHeadModel.from_pretrained(ckpt).to(_device()).eval()
+    g = cfg["generate"]
+    preds = []
+    for ex in tqdm(examples, desc="gpt2"):
+        prompt = f"{ex['mr_text']} <|sep|> "
+        ids = tok(prompt, return_tensors="pt").to(model.device)
+        out = model.generate(
+            **ids,
+            max_new_tokens=g["max_new_tokens"],
+            do_sample=True,
+            temperature=g["temperature"],
+            top_p=g["top_p"],
+            pad_token_id=tok.pad_token_id,
+        )
+        text = tok.decode(out[0, ids["input_ids"].size(1):], skip_special_tokens=True)
+        preds.append(text.strip())
+    return preds
+
+
+def gen_t5(cfg: dict, examples) -> list[str]:
+    ckpt = cfg["train"]["output_dir"]
+    tok = AutoTokenizer.from_pretrained(ckpt)
+    model = T5ForConditionalGeneration.from_pretrained(ckpt).to(_device()).eval()
+    g = cfg["generate"]
+    preds = []
+    for ex in tqdm(examples, desc="t5"):
+        ids = tok(ex["mr_text"], return_tensors="pt", truncation=True).to(model.device)
+        out = model.generate(
+            **ids,
+            num_beams=g["num_beams"],
+            max_new_tokens=g["max_new_tokens"],
+        )
+        preds.append(tok.decode(out[0], skip_special_tokens=True).strip())
+    return preds
+
+
+def gen_diffusion(cfg: dict, examples) -> list[str]:
+    ckpt_dir = Path(cfg["train"]["output_dir"])
+    ckpts = sorted(ckpt_dir.glob("checkpoint_epoch*.pt"))
+    if not ckpts:
+        raise FileNotFoundError(f"No Diffusion-LM checkpoint in {ckpt_dir}")
+    payload = torch.load(ckpts[-1], map_location=_device())
+    tok = AutoTokenizer.from_pretrained(ckpt_dir)
+
+    model = DiffusionLM(
+        vocab_size=tok.vocab_size,
+        embedding_dim=cfg["model"]["embedding_dim"],
+        hidden_dim=cfg["model"]["hidden_dim"],
+        num_layers=cfg["model"]["num_layers"],
+        num_heads=cfg["model"]["num_heads"],
+        max_length=cfg["data"]["max_length"],
+        num_timesteps=cfg["diffusion"]["num_timesteps"],
+    ).to(_device())
+    model.load_state_dict(payload["model"])
+    model.eval()
+
+    preds = []
+    for _ex in tqdm(examples, desc="diffusion_lm"):
+        # Unconditional sampling baseline; conditional control left as an
+        # extension (classifier guidance over slot tokens).
+        ids = model.sample(
+            batch_size=1,
+            length=cfg["data"]["max_length"],
+            ddim_steps=cfg["generate"]["ddim_steps"],
+        )
+        preds.append(tok.decode(ids[0], skip_special_tokens=True).strip())
+    return preds
+
+
+DISPATCH = {"gpt2": gen_gpt2, "t5": gen_t5, "diffusion_lm": gen_diffusion}
 
 
 def main() -> None:
@@ -13,15 +100,26 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--split", default="test")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--limit", type=int, default=None, help="Cap examples for quick debug")
     args = parser.parse_args()
 
     cfg = yaml.safe_load(open(args.config))
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    examples = list(load_e2e(args.split))
+    if args.limit:
+        examples = examples[: args.limit]
 
-    raise NotImplementedError(
-        f"Load checkpoint from {cfg['train']['output_dir']}, run inference on "
-        f"E2E {args.split}, append each prediction as JSON line to {args.out}."
-    )
+    preds = DISPATCH[cfg["model"]["type"]](cfg, examples)
+
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, "w") as f:
+        for ex, p in zip(examples, preds):
+            f.write(json.dumps({
+                "mr_text": ex["mr_text"],
+                "slots": ex["slots"],
+                "prediction": p,
+                "reference": ex["reference"],
+            }) + "\n")
+    print(f"Wrote {len(preds)} predictions to {args.out}")
 
 
 if __name__ == "__main__":
