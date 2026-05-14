@@ -20,19 +20,40 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class SqrtSchedule:
-    """Diffusion-LM's sqrt noise schedule (Section 4.1)."""
+class NoiseSchedule:
+    """Diffusion noise schedule. `kind` ∈ {"sqrt", "cosine", "linear"}.
 
-    def __init__(self, num_timesteps: int = 2000, s: float = 1e-4):
+    - sqrt   : Diffusion-LM (Li et al. 2022) — alpha_bar = 1 - sqrt(t/T + s)
+    - cosine : Nichol & Dhariwal (2021) improved schedule
+    - linear : DDPM original
+    """
+
+    def __init__(self, num_timesteps: int = 2000, kind: str = "sqrt", s: float = 1e-4):
         self.T = num_timesteps
+        self.kind = kind
         t = torch.arange(num_timesteps + 1, dtype=torch.float64) / num_timesteps
-        alpha_bar = 1.0 - torch.sqrt(t + s)
-        alpha_bar = alpha_bar / alpha_bar[0]
-        self.alpha_bar = alpha_bar.float()
+        if kind == "sqrt":
+            alpha_bar = 1.0 - torch.sqrt(t + s)
+            alpha_bar = alpha_bar / alpha_bar[0]
+        elif kind == "cosine":
+            f = torch.cos((t + s) / (1 + s) * math.pi / 2) ** 2
+            alpha_bar = f / f[0]
+        elif kind == "linear":
+            beta = torch.linspace(1e-4, 0.02, num_timesteps + 1, dtype=torch.float64)
+            alpha = 1.0 - beta
+            alpha_bar = torch.cumprod(alpha, dim=0)
+            alpha_bar = alpha_bar / alpha_bar[0]
+        else:
+            raise ValueError(f"unknown schedule kind: {kind}")
+        self.alpha_bar = alpha_bar.clamp(min=1e-6, max=1.0).float()
 
     def q_sample(self, x0: torch.Tensor, t: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
         ab = self.alpha_bar.to(x0.device)[t].view(-1, 1, 1)
         return torch.sqrt(ab) * x0 + torch.sqrt(1.0 - ab) * noise
+
+
+# Back-compat alias.
+SqrtSchedule = NoiseSchedule
 
 
 class SinusoidalTimeEmbed(nn.Module):
@@ -57,6 +78,7 @@ class DiffusionLM(nn.Module):
         num_heads: int = 8,
         max_length: int = 64,
         num_timesteps: int = 2000,
+        noise_schedule: str = "sqrt",
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
@@ -79,7 +101,7 @@ class DiffusionLM(nn.Module):
         self.out_proj = nn.Linear(hidden_dim, embedding_dim)
         self.lm_head = nn.Linear(embedding_dim, vocab_size, bias=False)
         self.lm_head.weight = self.embedding.weight
-        self.schedule = SqrtSchedule(num_timesteps)
+        self.schedule = NoiseSchedule(num_timesteps, kind=noise_schedule)
 
     def predict_x0(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         B, L, _ = x_t.shape

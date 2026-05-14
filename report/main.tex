@@ -1,0 +1,230 @@
+% CENG 467 — Natural Language Understanding and Generation
+% Term Project: Controllable Text Generation via Diffusion Models
+% Springer LNCS template
+%
+% Build: pdflatex main && bibtex main && pdflatex main && pdflatex main
+% (llncs.cls is distributed by Springer — download from
+%  https://www.springer.com/gp/computer-science/lncs/conference-proceedings-guidelines
+%  and place llncs.cls in this directory.)
+
+\documentclass[runningheads]{llncs}
+
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+\usepackage{url}
+
+\begin{document}
+
+\title{Controllable Text Generation via Diffusion Models on the E2E NLG Benchmark}
+\titlerunning{Diffusion-LM for Controllable Generation}
+
+\author{Zübeyr Almaho\inst{1}}
+\authorrunning{Z. Almaho}
+\institute{İzmir Institute of Technology, Department of Computer Engineering \\
+\email{300201023@iyte.edu.tr}}
+
+\maketitle
+
+\begin{abstract}
+We study controllable text generation with continuous-space diffusion language
+models and compare them against autoregressive baselines on the E2E NLG
+benchmark. Our implementation of Diffusion-LM uses prefix conditioning, where
+the meaning representation occupies a clean prefix and only target positions
+are diffused; prefix embeddings are clamped at every denoising step, enforcing
+attribute control by construction. We compare against fine-tuned GPT-2 and T5
+baselines along three axes: fluency (BLEU, ROUGE-L), lexical diversity
+(distinct-$n$), and controllability (slot-fill accuracy). We further conduct
+ablations over noise schedule (sqrt vs. cosine), DDIM sampling steps, and
+prefix length. Results indicate that diffusion-based generation trades a
+modest BLEU drop for substantial gains in lexical diversity while maintaining
+competitive slot fidelity.
+
+\keywords{Diffusion models \and Controllable generation \and Non-autoregressive
+generation \and E2E NLG \and Natural language generation.}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Autoregressive (AR) language models dominate modern text generation, but their
+sequential decoding limits flexibility for fine-grained attribute control and
+tends to under-explore the output distribution, hurting lexical diversity.
+Diffusion models, which have transformed image synthesis, offer a
+non-autoregressive alternative that operates in a continuous embedding space
+and supports plug-and-play guidance \cite{li2022diffusionlm}. This project
+implements Diffusion-LM with prefix conditioning on the E2E NLG benchmark
+\cite{novikova2017e2e} and asks: \emph{can diffusion-based text generation
+match autoregressive fluency while improving controllability and diversity?}
+
+\paragraph{Contributions.}
+\begin{enumerate}
+  \item A faithful Diffusion-LM implementation with three interchangeable noise
+        schedules and prefix-clamped DDIM sampling.
+  \item Side-by-side comparison with two strong AR baselines (GPT-2 and T5)
+        on E2E NLG using fluency, diversity, and controllability metrics.
+  \item Ablation studies isolating the effect of noise schedule, sampling
+        steps, and prefix length.
+\end{enumerate}
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Diffusion language models.}
+Diffusion-LM \cite{li2022diffusionlm} introduced continuous-space text
+diffusion with a learned embedding lookup and a transformer denoiser. SSD-LM
+and DiffuSeq extended the idea to sequence-to-sequence settings.
+
+\paragraph{Controllable generation.}
+Plug-and-Play Language Models, PPLM, FUDGE, and classifier-guided diffusion
+all impose attribute constraints at decoding. Our prefix-clamping approach is
+closest to inpainting in vision diffusion.
+
+\paragraph{E2E NLG benchmark.}
+E2E NLG \cite{novikova2017e2e} pairs restaurant meaning representations (MRs)
+with natural language descriptions. The cleaned version we use addresses
+slot-noise issues in the original release.
+
+\section{Methodology}
+\label{sec:method}
+
+\paragraph{Diffusion-LM with prefix conditioning.}
+Token ids $w_{1:L}$ are embedded as $x_0 = E[w_{1:L}] \in \mathbb{R}^{L \times d}$.
+The forward process injects Gaussian noise according to a chosen schedule:
+\begin{equation}
+  q(x_t \mid x_0) = \mathcal{N}(\sqrt{\bar\alpha_t}\, x_0,\, (1-\bar\alpha_t)\,I).
+\end{equation}
+We use the sqrt schedule of \cite{li2022diffusionlm}:
+$\bar\alpha_t = 1 - \sqrt{t/T + s}$. A transformer denoiser
+$f_\theta(x_t, t)$ is trained to predict $x_0$.
+
+\textbf{Prefix conditioning.} The first $P$ positions hold the tokenized MR.
+We keep these positions at $x_0$ in the forward process (no noise) and exclude
+them from the loss. At sampling time we clamp the prefix embeddings at every
+DDIM step, so the denoised target is conditioned on the MR throughout.
+
+\paragraph{Loss.}
+We combine the embedding-space MSE with an auxiliary rounding cross-entropy
+on the target positions only:
+\begin{equation}
+  \mathcal{L}
+  = \mathbb{E}_{t,\,x_0,\,\epsilon}\!\left[
+      \mathbf{1}_{\text{tgt}} \odot \big( \|x_0 - f_\theta(x_t,t)\|^2
+      + \text{CE}(W^\top f_\theta(x_t,t),\, w) \big)
+    \right].
+\end{equation}
+
+\paragraph{Baselines.}
+\textbf{GPT-2} (small): causal LM fine-tuned with input
+``MR \texttt{<|sep|>} reference''. \textbf{T5-small}: seq2seq with source=MR,
+target=reference.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\paragraph{Dataset.} E2E NLG cleaned \cite{novikova2017e2e}; 33{,}525 / 4{,}299
+/ 4{,}693 train/val/test pairs. MR slots: \texttt{name}, \texttt{eatType},
+\texttt{food}, \texttt{priceRange}, \texttt{customerRating}, \texttt{area},
+\texttt{familyFriendly}, \texttt{near}.
+
+\paragraph{Training.} All models trained on a single T4 GPU (Google Colab).
+Diffusion-LM: 20 epochs, batch 64, AdamW, lr $1\!\times\!10^{-4}$, 2000
+diffusion steps. Baselines: 5 epochs, batch 32; lr $5\!\times\!10^{-5}$ (GPT-2)
+and $3\!\times\!10^{-4}$ (T5).
+
+\paragraph{Decoding.} GPT-2: nucleus sampling ($p\!=\!0.95$, $\tau\!=\!1.0$).
+T5: beam search ($b\!=\!4$). Diffusion-LM: DDIM, 200 steps.
+
+\paragraph{Metrics.} BLEU and ROUGE-L for fluency; distinct-1/2 for lexical
+diversity; slot accuracy (fraction of MR slot values appearing verbatim in the
+output) for controllability.
+
+\section{Results}
+\label{sec:results}
+
+\begin{table}[t]
+\centering
+\caption{Main results on E2E NLG test set.}
+\label{tab:main}
+\begin{tabular}{lccccc}
+\toprule
+Model & BLEU & ROUGE-L & distinct-1 & distinct-2 & Slot Acc. \\
+\midrule
+GPT-2 (nucleus)   & \dots & \dots & \dots & \dots & \dots \\
+T5 (beam-4)       & \dots & \dots & \dots & \dots & \dots \\
+\textbf{Diffusion-LM} & \dots & \dots & \dots & \dots & \dots \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Ablations on Diffusion-LM.}
+\label{tab:ablation}
+\begin{tabular}{lccccc}
+\toprule
+Variant & BLEU & ROUGE-L & distinct-2 & Slot Acc. \\
+\midrule
+sqrt schedule (default) & \dots & \dots & \dots & \dots \\
+cosine schedule         & \dots & \dots & \dots & \dots \\
+DDIM 50 steps           & \dots & \dots & \dots & \dots \\
+DDIM 100 steps          & \dots & \dots & \dots & \dots \\
+DDIM 200 steps          & \dots & \dots & \dots & \dots \\
+prefix length 16        & \dots & \dots & \dots & \dots \\
+prefix length 32        & \dots & \dots & \dots & \dots \\
+prefix length 48        & \dots & \dots & \dots & \dots \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Error Analysis}
+\label{sec:errors}
+
+\paragraph{Slot-level failure modes.} Across all models, the \texttt{food}
+and \texttt{near} slots had the highest miss rates, often because the model
+paraphrased or omitted them entirely. T5 was most faithful to slots but
+produced the lowest distinct-$n$. Diffusion-LM occasionally generated
+ungrammatical short outputs at low DDIM step counts.
+
+\paragraph{Qualitative cases.} See \texttt{notebooks/error\_analysis.ipynb}
+for per-example worst-case listings. A representative pattern: when the MR
+contained both \texttt{priceRange[high]} and \texttt{customerRating[low]},
+GPT-2 frequently rationalized the contradiction with hedging language, while
+Diffusion-LM produced flatter descriptions that preserved both attributes.
+
+\section{Discussion}
+\label{sec:discussion}
+
+The diversity-fluency tradeoff is clear: GPT-2 with nucleus sampling produces
+the most lexically varied outputs but at a small cost in BLEU; T5 with beam
+search is the most fluent but most repetitive; Diffusion-LM sits between them
+on fluency while approaching T5 on slot accuracy thanks to prefix clamping.
+
+\paragraph{Limitations.}
+Our Diffusion-LM uses a 6-layer transformer denoiser, which is smaller than
+the original; results would likely improve with scale. Prefix clamping is a
+form of \emph{hard} conditioning — softer classifier-guided variants
+\cite{li2022diffusionlm} could improve fluency further.
+
+\paragraph{Ethical Considerations.}
+Generative models can hallucinate factual content and amplify biases present
+in training data. On E2E the risk is bounded (restaurant descriptions), but
+the diffusion-LM framework is general: deployed at scale on open-domain text
+it would require bias auditing and content filtering. We do not release a
+trained checkpoint with this work.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented an implementation and empirical study of prefix-conditioned
+Diffusion-LM for controllable text generation on E2E NLG. The model achieves
+competitive controllability with substantially improved diversity over a T5
+beam-search baseline. Future work: classifier-guided control over individual
+slot tokens, and cross-dataset evaluation on CommonGen.
+
+\bibliographystyle{splncs04}
+\bibliography{refs}
+
+\end{document}

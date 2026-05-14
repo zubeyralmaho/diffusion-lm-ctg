@@ -75,6 +75,7 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
         num_heads=cfg["model"]["num_heads"],
         max_length=cfg["data"]["max_length"],
         num_timesteps=cfg["diffusion"]["num_timesteps"],
+        noise_schedule=cfg["diffusion"].get("noise_schedule", "sqrt"),
     ).to(_device())
     model.load_state_dict(payload["model"])
     model.eval()

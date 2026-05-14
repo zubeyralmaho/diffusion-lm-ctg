@@ -151,6 +151,7 @@ def train_diffusion_lm(cfg: dict) -> None:
         num_heads=cfg["model"]["num_heads"],
         max_length=max_len,
         num_timesteps=cfg["diffusion"]["num_timesteps"],
+        noise_schedule=cfg["diffusion"].get("noise_schedule", "sqrt"),
     ).to(device)
 
     loader = DataLoader(train_ds, batch_size=cfg["data"]["batch_size"], shuffle=True)

@@ -1,0 +1,27 @@
+name: diffusion_lm_cosine
+model:
+  type: diffusion_lm
+  embedding_dim: 128
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  vocab_size: 30522
+  tokenizer: bert-base-uncased
+diffusion:
+  num_timesteps: 2000
+  noise_schedule: cosine
+  self_conditioning: true
+data:
+  dataset: e2e_nlg
+  max_length: 96
+  prefix_length: 32
+  batch_size: 64
+train:
+  epochs: 20
+  lr: 1.0e-4
+  weight_decay: 0.0
+  warmup_steps: 1000
+  output_dir: checkpoints/diffusion_lm_cosine
+generate:
+  num_samples: 5
+  ddim_steps: 200
