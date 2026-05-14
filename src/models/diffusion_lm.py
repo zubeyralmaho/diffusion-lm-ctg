@@ -1,12 +1,15 @@
-"""Diffusion-LM (Li et al., NeurIPS 2022).
+"""Diffusion-LM (Li et al., NeurIPS 2022) with prefix conditioning.
 
 Continuous-space text diffusion: tokens are mapped to learned embeddings, noise
 is added in embedding space, and a Transformer denoiser predicts the clean
 embeddings (x0-prediction). A rounding step projects denoised vectors back to
 the vocabulary at inference.
 
-This file is a faithful but minimal skeleton — flesh out forward/sample for
-final training runs.
+**Controllability via prefix conditioning**: the meaning representation (MR)
+occupies the first `prefix_len` positions and is kept clean (no noise added,
+not included in the loss). Only target positions are diffused. At sampling
+time, the prefix embeddings are clamped to the MR throughout denoising — the
+model is forced to produce a target consistent with the given attributes.
 """
 from __future__ import annotations
 
@@ -86,24 +89,78 @@ class DiffusionLM(nn.Module):
         h = self.transformer(h)
         return self.out_proj(h)
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        target_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute loss. `target_mask` is 1 for positions to diffuse / score and
+        0 for prefix (MR) positions, which are kept clean and excluded from
+        the loss. If None, the whole sequence is treated as target (uncond).
+        """
         x0 = self.embedding(input_ids)
+        if target_mask is None:
+            target_mask = torch.ones_like(input_ids, dtype=torch.float)
+        m = target_mask.unsqueeze(-1).float()
+
         t = torch.randint(0, self.schedule.T, (x0.size(0),), device=x0.device)
         noise = torch.randn_like(x0)
-        x_t = self.schedule.q_sample(x0, t, noise)
+        x_t_target = self.schedule.q_sample(x0, t, noise)
+        # Clamp prefix positions to clean embeddings.
+        x_t = m * x_t_target + (1.0 - m) * x0
+
         x0_hat = self.predict_x0(x_t, t)
-        loss_mse = F.mse_loss(x0_hat, x0)
+
+        # Restrict both losses to target positions.
+        mse = ((x0_hat - x0) ** 2 * m).sum() / m.sum().clamp_min(1.0) / x0.size(-1)
         logits = self.lm_head(x0_hat)
-        loss_ce = F.cross_entropy(logits.view(-1, logits.size(-1)), input_ids.view(-1))
-        return loss_mse + loss_ce
+        ce = F.cross_entropy(
+            logits.view(-1, logits.size(-1)),
+            input_ids.view(-1),
+            reduction="none",
+        )
+        ce = (ce * target_mask.view(-1).float()).sum() / target_mask.sum().clamp_min(1.0)
+        return mse + ce
 
     @torch.no_grad()
-    def sample(self, batch_size: int, length: int, ddim_steps: int = 200) -> torch.Tensor:
+    def sample(
+        self,
+        length: int,
+        prefix_ids: torch.Tensor | None = None,
+        ddim_steps: int = 200,
+        batch_size: int = 1,
+    ) -> torch.Tensor:
+        """Generate token ids. If `prefix_ids` is given (shape [B, P]), the
+        first P positions are clamped to the prefix embeddings throughout
+        denoising and the remaining `length - P` positions are the target.
+        """
         device = next(self.parameters()).device
-        x = torch.randn(batch_size, length, self.embedding.embedding_dim, device=device)
-        timesteps = torch.linspace(self.schedule.T - 1, 0, ddim_steps, dtype=torch.long, device=device)
+        if prefix_ids is not None:
+            B, P = prefix_ids.shape
+            assert P < length, "prefix must be shorter than total length"
+            prefix_emb = self.embedding(prefix_ids.to(device))
+        else:
+            B = batch_size
+            P = 0
+            prefix_emb = None
+
+        x = torch.randn(B, length, self.embedding.embedding_dim, device=device)
+        if prefix_emb is not None:
+            x[:, :P] = prefix_emb
+
+        timesteps = torch.linspace(
+            self.schedule.T - 1, 0, ddim_steps, dtype=torch.long, device=device
+        )
         for t in timesteps:
-            t_batch = t.expand(batch_size)
-            x = self.predict_x0(x, t_batch)
+            t_batch = t.expand(B)
+            x0_hat = self.predict_x0(x, t_batch)
+            # Clamp prefix every step so the condition cannot drift.
+            if prefix_emb is not None:
+                x0_hat[:, :P] = prefix_emb
+            x = x0_hat
+
         logits = self.lm_head(x)
-        return logits.argmax(dim=-1)
+        ids = logits.argmax(dim=-1)
+        if prefix_emb is not None:
+            ids[:, :P] = prefix_ids.to(device)
+        return ids

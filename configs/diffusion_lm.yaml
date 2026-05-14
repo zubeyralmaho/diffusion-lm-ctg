@@ -13,7 +13,8 @@ diffusion:
   self_conditioning: true
 data:
   dataset: e2e_nlg
-  max_length: 64
+  max_length: 96
+  prefix_length: 32       # MR prefix; target_len = max_length - prefix_length
   batch_size: 64
 train:
   epochs: 20

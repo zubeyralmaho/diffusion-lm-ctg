@@ -118,13 +118,30 @@ def train_diffusion_lm(cfg: dict) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tok = AutoTokenizer.from_pretrained(cfg["model"]["tokenizer"])
     max_len = cfg["data"]["max_length"]
+    prefix_len = cfg["data"].get("prefix_length", max_len // 2)
+    target_len = max_len - prefix_len
 
     def encode(ex):
-        text = f"{ex['mr_text']} [SEP] {ex['reference']}"
-        return tok(text, truncation=True, max_length=max_len, padding="max_length")
+        prefix = tok(
+            ex["mr_text"],
+            truncation=True,
+            max_length=prefix_len,
+            padding="max_length",
+            add_special_tokens=False,
+        )["input_ids"]
+        target = tok(
+            ex["reference"],
+            truncation=True,
+            max_length=target_len,
+            padding="max_length",
+            add_special_tokens=False,
+        )["input_ids"]
+        input_ids = prefix + target
+        target_mask = [0] * prefix_len + [1] * target_len
+        return {"input_ids": input_ids, "target_mask": target_mask}
 
     train_ds = load_e2e("train").map(encode, remove_columns=["mr_text", "slots", "reference"])
-    train_ds.set_format("torch", columns=["input_ids"])
+    train_ds.set_format("torch", columns=["input_ids", "target_mask"])
 
     model = DiffusionLM(
         vocab_size=tok.vocab_size,
@@ -151,7 +168,8 @@ def train_diffusion_lm(cfg: dict) -> None:
         running = 0.0
         for batch in loader:
             input_ids = batch["input_ids"].to(device)
-            loss = model(input_ids)
+            target_mask = batch["target_mask"].to(device)
+            loss = model(input_ids, target_mask=target_mask)
             optim.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

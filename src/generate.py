@@ -79,16 +79,26 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
     model.load_state_dict(payload["model"])
     model.eval()
 
+    max_len = cfg["data"]["max_length"]
+    prefix_len = cfg["data"].get("prefix_length", max_len // 2)
+
     preds = []
-    for _ex in tqdm(examples, desc="diffusion_lm"):
-        # Unconditional sampling baseline; conditional control left as an
-        # extension (classifier guidance over slot tokens).
+    for ex in tqdm(examples, desc="diffusion_lm"):
+        prefix_ids = tok(
+            ex["mr_text"],
+            truncation=True,
+            max_length=prefix_len,
+            padding="max_length",
+            add_special_tokens=False,
+            return_tensors="pt",
+        )["input_ids"].to(_device())
         ids = model.sample(
-            batch_size=1,
-            length=cfg["data"]["max_length"],
+            length=max_len,
+            prefix_ids=prefix_ids,
             ddim_steps=cfg["generate"]["ddim_steps"],
         )
-        preds.append(tok.decode(ids[0], skip_special_tokens=True).strip())
+        target_ids = ids[0, prefix_len:]
+        preds.append(tok.decode(target_ids, skip_special_tokens=True).strip())
     return preds
 
 
