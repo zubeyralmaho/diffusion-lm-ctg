@@ -62,10 +62,11 @@ def train_gpt2(cfg: dict) -> None:
         args=args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        tokenizer=tok,
         data_collator=DataCollatorForLanguageModeling(tok, mlm=False),
     ).train()
+    # Save tokenizer + final model so generate.py can from_pretrained() the dir.
     tok.save_pretrained(cfg["train"]["output_dir"])
+    model.save_pretrained(cfg["train"]["output_dir"])
 
 
 # ---------- T5 ----------
@@ -104,10 +105,10 @@ def train_t5(cfg: dict) -> None:
         args=args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        tokenizer=tok,
         data_collator=DataCollatorForSeq2Seq(tok, model=model),
     ).train()
     tok.save_pretrained(cfg["train"]["output_dir"])
+    model.save_pretrained(cfg["train"]["output_dir"])
 
 
 # ---------- Diffusion-LM ----------
