@@ -24,6 +24,8 @@ Runtime → Change runtime type → **A100** (varsa) veya **L4**, yoksa T4.
 
 Sırayla, üstten aşağı. Her hücre öncekinin bitmesini bekler.
 
+**Önemli:** Bölüm 1b'deki **smoke test** hücresi (~10 sn) ilk önce çalışsın. 4 testin de PASS olmalı. Bu pipeline'ın bozulmadığını doğrular — saatler harcamadan önce. FAIL alırsan Zübeyr'e haber ver.
+
 Tahmini süreler:
 
 | Hücre | T4 | A100 |
