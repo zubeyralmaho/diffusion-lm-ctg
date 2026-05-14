@@ -1,0 +1,18 @@
+name: t5_baseline
+model:
+  type: t5
+  pretrained: t5-small
+data:
+  dataset: e2e_nlg
+  max_source_length: 128
+  max_target_length: 128
+  batch_size: 32
+train:
+  epochs: 5
+  lr: 3.0e-4
+  weight_decay: 0.0
+  warmup_steps: 500
+  output_dir: checkpoints/t5_baseline
+generate:
+  num_beams: 4
+  max_new_tokens: 64

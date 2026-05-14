@@ -1,0 +1,19 @@
+name: gpt2_baseline
+model:
+  type: gpt2
+  pretrained: gpt2
+data:
+  dataset: e2e_nlg
+  max_length: 128
+  batch_size: 32
+train:
+  epochs: 5
+  lr: 5.0e-5
+  weight_decay: 0.01
+  warmup_steps: 500
+  output_dir: checkpoints/gpt2_baseline
+generate:
+  num_samples: 5
+  temperature: 1.0
+  top_p: 0.95
+  max_new_tokens: 64

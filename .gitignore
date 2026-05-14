@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Data & artifacts
+data/raw/
+data/processed/
+checkpoints/
+results/generations/*
+results/metrics/*
+!results/generations/.gitkeep
+!results/metrics/.gitkeep
+wandb/
+runs/
+*.ckpt
+*.pt
+*.bin
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Claude
+.claude/settings.local.json
