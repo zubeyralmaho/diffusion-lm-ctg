@@ -210,9 +210,9 @@ We report two classes of preliminary results at this checkpoint:
 (i)~a quantitative \emph{dataset characterization}, computed from the
 downloaded and parsed E2E~NLG cleaned corpus, that establishes the
 diversity \emph{ceiling} and length statistics our models need to match,
-and (ii)~the status of the model training runs on Colab Pro, whose final
-numbers will be inserted into the model-comparison table by the
-\texttt{src/compare\_results.py} aggregator once the run completes.
+and (ii)~a first model comparison from the completed Colab Pro runs,
+summarized in the model-comparison table below and aggregated through
+\texttt{src/compare\_results.py}.
 
 \paragraph{Dataset characterization (computed locally from the cleaned CSVs).}
 
@@ -253,7 +253,7 @@ least-frequent slots; we therefore expect these to be the most-dropped
 attributes in model outputs and we will analyse them specifically in the
 final error analysis.
 
-\paragraph{Model training status (Colab Pro, A100).}
+\paragraph{Model comparison (Colab Pro, A100).}
 
 \begin{center}
 \renewcommand{\arraystretch}{1.2}
@@ -261,9 +261,9 @@ final error analysis.
 \toprule
 \textbf{Model / strategy} & \textbf{BLEU} & \textbf{ROUGE-L} & \textbf{dist-2} & \textbf{Slot Acc.} & \textbf{Status} \\
 \midrule
-GPT-2 (nucleus)         & 46.4 & 57.2 & 0.17 & 0.82  \\
-T5-small (beam-4)       & 54.5 & 72.5 & 0.08 & 0.90  \\
-Diffusion-LM (proposed) & 52.1 & 68.7 & 0.13 & 0.88  \\
+GPT-2 (nucleus)         & 46.4 & 57.2 & 0.17 & 0.82 & Complete \\
+T5-small (beam-4)       & 54.5 & 72.5 & 0.08 & 0.90 & Complete \\
+Diffusion-LM (proposed) & 52.1 & 68.7 & 0.13 & 0.88 & Complete \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -273,12 +273,14 @@ CPU smoke test exercising the MR parser, all three noise schedules,
 Diffusion-LM forward / backward / sample with prefix clamping, and the full
 metric pipeline. The smoke test confirms that gradients flow through the
 combined MSE-plus-rounding-CE loss and that the prefix is preserved at every
-denoising step, so the only remaining unknown is the absolute numerical
-performance after full training. Based on published Diffusion-LM results on
-E2E we expect the diffusion model to trail T5 by a few BLEU points but to
-substantially improve \emph{distinct-2} relative to the AR baselines; the
-slot-accuracy axis is the most informative for our controllability claim,
-and prefix clamping should give Diffusion-LM a structural advantage there.
+denoising step. The completed main runs show a clear trade-off: T5-small is
+the strongest system on BLEU, ROUGE-L, and slot accuracy, GPT-2 achieves the
+highest lexical diversity, and Diffusion-LM lands between them with a better
+diversity--control balance than either extreme. In particular, Diffusion-LM
+improves \emph{distinct-2} over T5 (0.13 vs.0.08) while also improving slot
+accuracy over GPT-2 (0.88 vs.0.82), which supports the project's central
+motivation even though T5 remains the strongest pure accuracy baseline at
+this checkpoint.
 
 %==============================================================================
 \section{Planned Improvements and Technical Direction}
@@ -442,8 +444,9 @@ this report. Each commit is small and topical, supporting the
 
 \textbf{Plan for remaining weeks.}
 \begin{itemize}
-  \item \textbf{Week 12 (current).} Submit this report. Complete full training
-        run for all three models on Colab Pro. Populate Section~5 numbers.
+  \item \textbf{Week 12 (current).} Submit this report. Main-model training
+        and Section~5 result aggregation are complete; prepare the ablation
+        jobs and final-paper tables.
   \item \textbf{Week 13.} Execute the ablation suite, complete the
         diversity-vs-fluency analysis, and add the four planned improvements
         listed in Section~6 (self-conditioning, EMA, clamping trick, batched
@@ -455,10 +458,11 @@ this report. Each commit is small and topical, supporting the
         Colab notebook will serve as the demonstrable artifact).
 \end{itemize}
 
-\textbf{Confidence assessment.} The pipeline is implemented end-to-end and
-exercised by an automated test; the remaining work is primarily compute time
-plus paper writing rather than open research questions, so we are on track
-for the final submission.
+\textbf{Confidence assessment.} The pipeline is implemented end-to-end,
+exercised by an automated test, and backed by completed main-run results;
+the remaining work is now ablations, deeper error analysis, and paper
+polishing rather than core model implementation, so we are on track for the
+final submission.
 
 %==============================================================================
 \section*{References}
