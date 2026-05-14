@@ -79,8 +79,9 @@ choice, rounding, sampling step count, and conditioning all interact.
 %==============================================================================
 \section{Dataset / Benchmark Status}
 
-\textbf{Benchmark.} E2E~NLG \emph{cleaned} (Du\v{s}ek et al., 2019; cleaned
-version of Novikova et al.\ 2017).
+\textbf{Benchmark.} E2E~NLG \emph{cleaned} \cite{dusek2019semantic}, the
+sanitized release of the original E2E challenge corpus
+\cite{novikova2017e2e}.
 
 \textbf{Source.} Direct CSV download from the official cleaned release at
 \url{https://github.com/tuetschek/e2e-cleaning} (initially we used the
@@ -137,28 +138,28 @@ We reviewed three threads of work and identified the methods that ground our
 choices of baseline, primary method, and evaluation.
 
 \textbf{(1)~Diffusion language models.}
-Li et al.~(\textit{Diffusion-LM}, NeurIPS~2022) introduced continuous-space
+\emph{Diffusion-LM} \cite{li2022diffusionlm} introduced continuous-space
 text diffusion with a learned token embedding lookup and a transformer
-denoiser trained with x0-prediction plus a rounding cross-entropy. Their
+denoiser trained with x0-prediction plus a rounding cross-entropy. Its
 ``sqrt'' noise schedule and plug-and-play classifier guidance are central to
-our design. Earlier image-domain work --- DDPM (Ho et al.\ 2020), improved
-DDPM (Nichol \& Dhariwal 2021), and DDIM (Song et al.\ 2021) --- provides the
-underlying forward process, the cosine schedule we use as an ablation, and the
-deterministic accelerated sampler we adopt at inference.
+our design. Earlier image-domain work --- DDPM \cite{ho2020ddpm}, improved
+DDPM \cite{nichol2021improved}, and DDIM \cite{song2021ddim} --- provides the
+underlying forward process, the cosine schedule we use as an ablation, and
+the deterministic accelerated sampler we adopt at inference.
 
 \textbf{(2)~Autoregressive conditional generation.}
-GPT-2 (Radford et al.\ 2019) and T5 (Raffel et al.\ 2020) are the standard AR
+GPT-2 \cite{radford2019gpt2} and T5 \cite{raffel2020t5} are the standard AR
 references for the E2E benchmark. Most published E2E systems are encoder--
 decoder models or fine-tuned causal LMs; we therefore adopt one of each
 (GPT-2-small and T5-small) as baselines.
 
 \textbf{(3)~Controllable generation and evaluation.}
-PPLM (Dathathri et al.\ 2020) and FUDGE establish gradient-based attribute
-control over AR decoders, motivating our comparison axis of
-\emph{controllability} (slot accuracy). For evaluation we follow standard E2E
-practice: BLEU (Papineni et al.\ 2002) and ROUGE-L (Lin 2004) for fluency,
-distinct-$n$ (Li et al.\ 2016) for lexical diversity, and slot-fill accuracy
-for controllability.
+PPLM \cite{dathathri2020pplm} and FUDGE \cite{yang2021fudge} establish
+gradient-based attribute control over AR decoders, motivating our
+comparison axis of \emph{controllability} (slot accuracy). For evaluation
+we follow standard E2E practice: BLEU \cite{papineni2002bleu} and ROUGE-L
+\cite{lin2004rouge} for fluency, distinct-$n$ \cite{li2016diversity} for
+lexical diversity, and slot-fill accuracy for controllability.
 
 \textbf{Direction implied by the review.}
 The literature supports our design: a Diffusion-LM-style continuous-text
@@ -244,7 +245,7 @@ identified four concrete improvements with high expected impact and tractable
 implementation cost:
 
 \begin{enumerate}
-  \item \textbf{Self-conditioning} (Chen et al.\ 2022). Feed the previous
+  \item \textbf{Self-conditioning} \cite{chen2022analog}. Feed the previous
         step's $\hat x_0$ prediction as auxiliary input to the next step.
         Expected: $\sim$+1--2 BLEU at no extra inference cost.
   \item \textbf{EMA of denoiser weights.} Standard practice in diffusion
@@ -415,5 +416,85 @@ this report. Each commit is small and topical, supporting the
 exercised by an automated test; the remaining work is primarily compute time
 plus paper writing rather than open research questions, so we are on track
 for the final submission.
+
+%==============================================================================
+\section*{References}
+\addcontentsline{toc}{section}{References}
+
+\begin{thebibliography}{99}
+
+\bibitem{li2022diffusionlm}
+Li, X.~L., Thickstun, J., Gulrajani, I., Liang, P., Hashimoto, T.~B.:
+\newblock Diffusion-LM Improves Controllable Text Generation.
+\newblock In: \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2022.
+
+\bibitem{ho2020ddpm}
+Ho, J., Jain, A., Abbeel, P.:
+\newblock Denoising Diffusion Probabilistic Models.
+\newblock In: \emph{NeurIPS}, 2020.
+
+\bibitem{nichol2021improved}
+Nichol, A.~Q., Dhariwal, P.:
+\newblock Improved Denoising Diffusion Probabilistic Models.
+\newblock In: \emph{International Conference on Machine Learning (ICML)}, 2021.
+
+\bibitem{song2021ddim}
+Song, J., Meng, C., Ermon, S.:
+\newblock Denoising Diffusion Implicit Models.
+\newblock In: \emph{International Conference on Learning Representations (ICLR)}, 2021.
+
+\bibitem{chen2022analog}
+Chen, T., Zhang, R., Hinton, G.:
+\newblock Analog Bits: Generating Discrete Data Using Diffusion Models with Self-Conditioning.
+\newblock arXiv preprint \emph{arXiv:2208.04202}, 2022.
+
+\bibitem{radford2019gpt2}
+Radford, A., Wu, J., Child, R., Luan, D., Amodei, D., Sutskever, I.:
+\newblock Language Models are Unsupervised Multitask Learners.
+\newblock \emph{OpenAI technical report}, 2019.
+
+\bibitem{raffel2020t5}
+Raffel, C., Shazeer, N., Roberts, A., Lee, K., Narang, S., Matena, M.,
+Zhou, Y., Li, W., Liu, P.~J.:
+\newblock Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer.
+\newblock \emph{Journal of Machine Learning Research} 21(140), 1--67, 2020.
+
+\bibitem{dathathri2020pplm}
+Dathathri, S., Madotto, A., Lan, J., Hung, J., Frank, E., Molino, P.,
+Yosinski, J., Liu, R.:
+\newblock Plug and Play Language Models: A Simple Approach to Controlled Text Generation.
+\newblock In: \emph{ICLR}, 2020.
+
+\bibitem{yang2021fudge}
+Yang, K., Klein, D.:
+\newblock FUDGE: Controlled Text Generation with Future Discriminators.
+\newblock In: \emph{Proceedings of NAACL-HLT}, 2021.
+
+\bibitem{novikova2017e2e}
+Novikova, J., Du\v{s}ek, O., Rieser, V.:
+\newblock The E2E Dataset: New Challenges for End-to-End Generation.
+\newblock In: \emph{Proceedings of the 18th Annual SIGdial Meeting on Discourse and Dialogue}, 2017.
+
+\bibitem{dusek2019semantic}
+Du\v{s}ek, O., Howcroft, D.~M., Rieser, V.:
+\newblock Semantic Noise Matters for Neural Natural Language Generation.
+\newblock In: \emph{Proceedings of the 12th International Conference on Natural Language Generation (INLG)}, 2019.
+
+\bibitem{papineni2002bleu}
+Papineni, K., Roukos, S., Ward, T., Zhu, W.-J.:
+\newblock BLEU: A Method for Automatic Evaluation of Machine Translation.
+\newblock In: \emph{Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics (ACL)}, 2002.
+
+\bibitem{lin2004rouge}
+Lin, C.-Y.:
+\newblock ROUGE: A Package for Automatic Evaluation of Summaries.
+\newblock In: \emph{Text Summarization Branches Out}, 2004.
+
+\bibitem{li2016diversity}
+Li, J., Galley, M., Brockett, C., Gao, J., Dolan, B.:
+\newblock A Diversity-Promoting Objective Function for Neural Conversation Models.
+\newblock In: \emph{Proceedings of NAACL-HLT}, 2016.
+
+\end{thebibliography}
 
 \end{document}
