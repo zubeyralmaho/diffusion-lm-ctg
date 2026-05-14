@@ -1,0 +1,215 @@
+% CENG 467 — Natural Language Understanding and Generation, Spring 2026
+% Term Project — Progress Report (Week 11 Technical Checkpoint)
+%
+% Build: pdflatex progress_report.tex  (no bibtex needed)
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{titling}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{amsmath,amssymb}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue!60!black,
+  citecolor=blue!60!black,
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  framesep=4pt,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  backgroundcolor=\color{gray!8},
+}
+
+\title{\vspace{-1.5cm}\textbf{Progress Report} \\[0.3em]
+\large Controllable Text Generation via Diffusion Models}
+\author{Zübeyr Almaho (300201023)}
+\date{CENG 467 — Spring 2026 \\
+      İzmir Institute of Technology \\
+      Prof. Dr.\ Aytuğ Onan \\[0.5em]
+      \today}
+
+\begin{document}
+\maketitle
+\vspace{-1em}
+
+\section*{1.\ Project Overview}
+
+This project investigates \textbf{controllable text generation with continuous
+diffusion language models} (Diffusion-LM, Li et al.\ 2022) and compares the
+proposed approach with two autoregressive (AR) baselines on the
+\textbf{E2E NLG cleaned} benchmark. The motivating question is whether a
+non-autoregressive diffusion-based generator can match the fluency of AR
+decoders while delivering measurably higher \emph{lexical diversity} and
+\emph{attribute controllability}.
+
+\paragraph{Task.} Given a meaning representation (MR) of restaurant
+attributes (e.g.\ \texttt{name[Loch Fyne], food[Japanese], priceRange[high]}),
+generate a fluent natural-language description that faithfully realizes all
+slots.
+
+\paragraph{Why diffusion?} AR sampling proceeds token-by-token and tends to
+collapse onto a narrow part of the output distribution. Diffusion-LM operates
+in a continuous embedding space and admits non-autoregressive
+\emph{plug-and-play} control via inpainting, classifier guidance, or — in our
+implementation — \textbf{prefix clamping}: the tokenized MR occupies a fixed
+prefix that is held constant across every denoising step.
+
+\section*{2.\ What is Done (Status by Component)}
+
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{p{4.6cm} p{1.5cm} p{8.3cm}}
+\toprule
+\textbf{Component} & \textbf{Status} & \textbf{Notes} \\
+\midrule
+Project scaffolding         & \textbf{Done} & Public GitHub repo with full directory layout. \\
+Data pipeline (E2E NLG)     & \textbf{Done} & Direct CSV load from \texttt{tuetschek/e2e-cleaning}; cached locally. \\
+GPT-2 baseline (124M)       & \textbf{Done} & Causal LM fine-tuning, \texttt{<|sep|>}-formatted prompts. \\
+T5-small baseline           & \textbf{Done} & Sequence-to-sequence with HF \texttt{Seq2SeqTrainer}. \\
+Diffusion-LM model          & \textbf{Done} & 6-layer denoiser, sqrt schedule, x0-prediction, prefix conditioning. \\
+\quad — three noise schedules & \textbf{Done} & sqrt / cosine / linear (configurable). \\
+\quad — DDIM sampling         & \textbf{Done} & Prefix embeddings clamped at every step. \\
+Evaluation                  & \textbf{Done} & BLEU, ROUGE-L, distinct-1/2, slot accuracy. \\
+Ablation suite              & \textbf{Done} & 5 configs (schedule, DDIM steps, prefix length). \\
+Smoke test                  & \textbf{Done} & 10-second CPU sanity test; runs in CI / Colab. \\
+LNCS report skeleton        & \textbf{Done} & All 8 required sections drafted with project content. \\
+Error analysis notebook     & \textbf{Done} & Per-slot failure rates, length distribution, qualitative dumps. \\
+\midrule
+Full training runs          & \textbf{Pending} & Running on Colab Pro (A100). \\
+Final numbers in tables     & \textbf{Pending} & Auto-aggregated via \texttt{src/compare\_results.py}. \\
+Final paper polish          & \textbf{Pending} & After numbers are filled in. \\
+Live demo                   & \textbf{Pending} & Notebook-based; will reuse Colab pipeline. \\
+\bottomrule
+\end{tabular}
+
+\section*{3.\ Implementation Highlights}
+
+\subsection*{3.1\ Prefix-conditioned Diffusion-LM}
+
+We embed tokens $w_{1:L}$ with a learned embedding matrix and add Gaussian
+noise in embedding space:
+\[
+  q(x_t \mid x_0) = \mathcal{N}\!\big(\sqrt{\bar\alpha_t}\, x_0,\; (1-\bar\alpha_t)\,I\big).
+\]
+The first $P$ positions hold the tokenized MR and are \emph{never noised}
+during training and \emph{never overwritten} during sampling. The denoiser
+$f_\theta(x_t, t)$ predicts $x_0$, and the loss combines an embedding-space
+MSE with an auxiliary rounding cross-entropy, both restricted to the target
+positions:
+\[
+  \mathcal{L} = \mathbb{E}_{t,\,x_0,\,\epsilon}\!\left[
+    \mathbf{1}_\text{tgt}\!\odot\!\big(\|x_0 - f_\theta(x_t,t)\|^2
+    + \mathrm{CE}(W^{\!\top}\!f_\theta(x_t,t),\,w)\big)
+  \right].
+\]
+This gives ``hard'' controllability: the model cannot escape the MR.
+
+\subsection*{3.2\ Baselines}
+
+\begin{itemize}[leftmargin=1.2em,topsep=2pt,itemsep=0pt]
+  \item \textbf{GPT-2 (124M).} Causal LM with input \texttt{"MR <|sep|> reference\textless{}eos\textgreater{}"}. Decoded with nucleus sampling ($p\!=\!0.95$, $\tau\!=\!1.0$).
+  \item \textbf{T5-small.} Encoder--decoder with source = MR text, target = reference. Decoded with beam search ($b\!=\!4$).
+\end{itemize}
+
+\subsection*{3.3\ Reproducibility}
+
+The full pipeline runs end-to-end via a single Colab notebook
+(\texttt{notebooks/colab\_train.ipynb}) with a \textbf{10-second smoke test}
+that exercises the MR parser, all noise schedules, Diffusion-LM forward /
+backward / sampling, and the metric pipeline. A separate \texttt{HANDOFF.md}
+document allows a collaborator to reproduce the entire run on Colab Pro
+without further guidance.
+
+\section*{4.\ Evaluation Plan}
+
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.6cm} p{4cm} p{8.5cm}}
+\toprule
+\textbf{Axis} & \textbf{Metrics} & \textbf{Purpose} \\
+\midrule
+Fluency           & BLEU, ROUGE-L              & Surface-level fidelity to references. \\
+Diversity         & distinct-1, distinct-2     & Lexical variety across the test set. \\
+Controllability   & Slot accuracy              & Fraction of MR slot values surfaced verbatim in the output. \\
+Sensitivity       & 5-way ablation             & Noise schedule, DDIM steps, prefix length. \\
+\bottomrule
+\end{tabular}
+
+\section*{5.\ Preliminary Results}
+
+Full training is in progress on Colab Pro (A100). Numbers will be inserted into
+the placeholder tables below once the run completes; the same numbers feed
+directly into the LNCS final paper via \texttt{results/summary.md}.
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+Model & BLEU & ROUGE-L & dist-1 & dist-2 & Slot Acc. \\
+\midrule
+GPT-2 (nucleus)         & — & — & — & — & — \\
+T5 (beam-4)             & — & — & — & — & — \\
+Diffusion-LM (proposed) & — & — & — & — & — \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{6.\ Risks and Mitigations}
+
+\begin{itemize}[leftmargin=1.2em,topsep=2pt,itemsep=2pt]
+  \item \textbf{Long training runtime.} Mitigation: per-epoch checkpointing,
+        smoke test before kickoff, partial training fallback that retains
+        baselines only.
+  \item \textbf{Diffusion-LM may underperform AR baselines on raw BLEU.}
+        Expected per the literature; the project explicitly studies the
+        \emph{diversity / control vs.\ fluency} tradeoff, so a small BLEU gap
+        is acceptable if compensated by distinct-$n$ and slot-accuracy gains.
+  \item \textbf{Slot accuracy is currently exact substring match.} Mitigation:
+        for the final paper we will optionally integrate the official E2E
+        scorer (BLEU, NIST, METEOR, ROUGE-L, CIDEr) from
+        \texttt{tuetschek/e2e-metrics} for stronger external validity.
+\end{itemize}
+
+\section*{7.\ Remaining Timeline}
+
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{2.5cm} p{12.5cm}}
+\toprule
+\textbf{Week} & \textbf{Deliverable} \\
+\midrule
+12 (now) & Submit this progress report. Complete full Colab training run
+            (GPT-2 + T5 + Diffusion-LM). \\
+13       & Run the 5 ablation experiments; populate the results tables in
+            \texttt{report/main.tex}. \\
+14       & Error analysis (per-slot failure modes, qualitative case study);
+            iterate on the LNCS draft. \\
+15       & Final paper submission and live demo (Colab walkthrough). \\
+\bottomrule
+\end{tabular}
+
+\section*{8.\ Repository}
+
+The complete project (source, configs, notebooks, report drafts, handoff
+documentation) is publicly available at:
+
+\begin{center}
+\url{https://github.com/zubeyralmaho/diffusion-lm-ctg}
+\end{center}
+
+The repository follows a clear, reproducible structure
+(\texttt{src/}, \texttt{configs/}, \texttt{scripts/}, \texttt{notebooks/},
+\texttt{report/}, \texttt{tests/}) and includes a \texttt{requirements.txt}
+plus end-to-end instructions in \texttt{README.md} and \texttt{HANDOFF.md}.
+
+\end{document}
