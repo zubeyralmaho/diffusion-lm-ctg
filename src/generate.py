@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import torch
@@ -15,7 +16,33 @@ from src.models.diffusion_lm import DiffusionLM
 
 
 def _device() -> str:
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend is not None and mps_backend.is_available():
+        return "mps"
+    return "cpu"
+
+
+_EPOCH_RE = re.compile(r"checkpoint_epoch(\d+)\.pt$")
+
+
+def find_diffusion_checkpoint(ckpt_dir: Path) -> Path:
+    best = ckpt_dir / "checkpoint_best.pt"
+    if best.exists():
+        return best
+
+    ckpts = []
+    for path in ckpt_dir.glob("checkpoint_epoch*.pt"):
+        match = _EPOCH_RE.search(path.name)
+        if match:
+            ckpts.append((int(match.group(1)), path))
+
+    if not ckpts:
+        raise FileNotFoundError(f"No Diffusion-LM checkpoint in {ckpt_dir}")
+
+    ckpts.sort(key=lambda item: item[0])
+    return ckpts[-1][1]
 
 
 def gen_gpt2(cfg: dict, examples) -> list[str]:
@@ -64,10 +91,8 @@ def gen_t5(cfg: dict, examples) -> list[str]:
 
 def gen_diffusion(cfg: dict, examples) -> list[str]:
     ckpt_dir = Path(cfg["train"]["output_dir"])
-    ckpts = sorted(ckpt_dir.glob("checkpoint_epoch*.pt"))
-    if not ckpts:
-        raise FileNotFoundError(f"No Diffusion-LM checkpoint in {ckpt_dir}")
-    payload = torch.load(ckpts[-1], map_location=_device())
+    ckpt_path = find_diffusion_checkpoint(ckpt_dir)
+    payload = torch.load(ckpt_path, map_location=_device())
     tok = AutoTokenizer.from_pretrained(ckpt_dir)
 
     model = DiffusionLM(
@@ -82,6 +107,7 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
     ).to(_device())
     model.load_state_dict(payload["model"])
     model.eval()
+    print(f"Loading diffusion checkpoint: {ckpt_path.name}")
 
     max_len = cfg["data"]["max_length"]
     prefix_len = cfg["data"].get("prefix_length", max_len // 2)

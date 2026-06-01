@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.e2e import parse_mr, slots_to_prompt  # noqa: E402
 from src.evaluate import compute_metrics  # noqa: E402
+from src.generate import find_diffusion_checkpoint  # noqa: E402
 from src.models.diffusion_lm import DiffusionLM, NoiseSchedule  # noqa: E402
 
 
@@ -107,6 +108,21 @@ def test_compute_metrics() -> None:
     print(f"  ✓ evaluate.compute_metrics (BLEU={metrics['bleu']}, slot_acc={metrics['slot_accuracy']})")
 
 
+def test_diffusion_checkpoint_selection() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        ckpt_dir = Path(tmp)
+        for name in ("checkpoint_epoch0.pt", "checkpoint_epoch2.pt", "checkpoint_epoch10.pt"):
+            (ckpt_dir / name).touch()
+        chosen = find_diffusion_checkpoint(ckpt_dir)
+        assert chosen.name == "checkpoint_epoch10.pt", chosen
+
+        best = ckpt_dir / "checkpoint_best.pt"
+        best.touch()
+        chosen = find_diffusion_checkpoint(ckpt_dir)
+        assert chosen.name == "checkpoint_best.pt", chosen
+    print("  ✓ diffusion checkpoint selection prefers best, then highest epoch")
+
+
 def main() -> int:
     print("Smoke test:")
     tests = [
@@ -114,6 +130,7 @@ def main() -> int:
         test_noise_schedules,
         test_diffusion_lm_forward_and_sample,
         test_compute_metrics,
+        test_diffusion_checkpoint_selection,
     ]
     failed = 0
     for t in tests:

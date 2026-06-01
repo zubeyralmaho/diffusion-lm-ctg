@@ -28,6 +28,27 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def evaluate_diffusion(model: DiffusionLM, loader: DataLoader, device: str) -> float:
+    model.eval()
+    running = 0.0
+    with torch.no_grad():
+        for batch in loader:
+            input_ids = batch["input_ids"].to(device)
+            target_mask = batch["target_mask"].to(device)
+            loss = model(input_ids, target_mask=target_mask)
+            running += loss.item()
+    return running / max(len(loader), 1)
+
+
+def diffusion_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend is not None and mps_backend.is_available():
+        return "mps"
+    return "cpu"
+
+
 # ---------- GPT-2 ----------
 
 def train_gpt2(cfg: dict) -> None:
@@ -54,6 +75,9 @@ def train_gpt2(cfg: dict) -> None:
         eval_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=2,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
         logging_steps=100,
         report_to=[],
     )
@@ -96,6 +120,9 @@ def train_t5(cfg: dict) -> None:
         eval_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=2,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
         predict_with_generate=True,
         logging_steps=100,
         report_to=[],
@@ -116,7 +143,7 @@ def train_t5(cfg: dict) -> None:
 def train_diffusion_lm(cfg: dict) -> None:
     from transformers import AutoTokenizer
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = diffusion_device()
     tok = AutoTokenizer.from_pretrained(cfg["model"]["tokenizer"])
     max_len = cfg["data"]["max_length"]
     prefix_len = cfg["data"].get("prefix_length", max_len // 2)
@@ -143,6 +170,8 @@ def train_diffusion_lm(cfg: dict) -> None:
 
     train_ds = load_e2e("train").map(encode, remove_columns=["mr_text", "slots", "reference"])
     train_ds.set_format("torch", columns=["input_ids", "target_mask"])
+    val_ds = load_e2e("validation").map(encode, remove_columns=["mr_text", "slots", "reference"])
+    val_ds.set_format("torch", columns=["input_ids", "target_mask"])
 
     model = DiffusionLM(
         vocab_size=tok.vocab_size,
@@ -156,6 +185,7 @@ def train_diffusion_lm(cfg: dict) -> None:
     ).to(device)
 
     loader = DataLoader(train_ds, batch_size=cfg["data"]["batch_size"], shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=cfg["data"]["batch_size"], shuffle=False)
     optim = torch.optim.AdamW(model.parameters(), lr=cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"])
     total_steps = len(loader) * cfg["train"]["epochs"]
     sched = get_linear_schedule_with_warmup(optim, cfg["train"]["warmup_steps"], total_steps)
@@ -163,6 +193,7 @@ def train_diffusion_lm(cfg: dict) -> None:
     out_dir = Path(cfg["train"]["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     tok.save_pretrained(out_dir)
+    best_val = math.inf
 
     step = 0
     for epoch in range(cfg["train"]["epochs"]):
@@ -181,11 +212,14 @@ def train_diffusion_lm(cfg: dict) -> None:
             step += 1
             if step % 100 == 0:
                 print(f"epoch {epoch} step {step} loss {loss.item():.4f}")
-        print(f"epoch {epoch} done | avg loss {running / len(loader):.4f}")
-        torch.save(
-            {"model": model.state_dict(), "config": cfg},
-            out_dir / f"checkpoint_epoch{epoch}.pt",
-        )
+        train_loss = running / len(loader)
+        val_loss = evaluate_diffusion(model, val_loader, device)
+        print(f"epoch {epoch} done | train loss {train_loss:.4f} | val loss {val_loss:.4f}")
+        payload = {"model": model.state_dict(), "config": cfg, "epoch": epoch, "val_loss": val_loss}
+        torch.save(payload, out_dir / f"checkpoint_epoch{epoch}.pt")
+        if val_loss < best_val:
+            best_val = val_loss
+            torch.save(payload, out_dir / "checkpoint_best.pt")
 
 
 DISPATCH = {"gpt2": train_gpt2, "t5": train_t5, "diffusion_lm": train_diffusion_lm}
