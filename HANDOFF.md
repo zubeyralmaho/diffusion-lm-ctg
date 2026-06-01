@@ -24,6 +24,31 @@ Runtime → Change runtime type → **A100** (varsa) veya **L4**, yoksa T4.
 
 Sırayla, üstten aşağı. Her hücre öncekinin bitmesini bekler.
 
+Yeni notebook akışında iki önemli güvenlik katmanı var:
+
+- Her major stage sonunda artifact snapshot'ı otomatik olarak Google Drive altına kaydedilir.
+- Her komut canlı log verir; ayrıca exit code ve süre bilgisi Drive'da status JSON olarak tutulur.
+
+Bu yüzden **0b. Drive mount + run klasörü** hücresini atlama.
+
+Snapshot dizini şu formatta oluşur:
+
+```text
+MyDrive/diffusion-lm-ctg-runs/<RUN_ID>/
+```
+
+Altında üç önemli klasör bulunur:
+
+- `status/` — her stage için süre ve exit code
+- `artifacts/` — checkpoint, generation, metric ve zip snapshot'ları
+- `logs/` — canlı komut çıktısının kaydı
+
+Eğer Colab runtime'ı düşerse yeni oturumda sadece şu sırayı izle:
+
+1. 0b, 1 ve 1b hücrelerini tekrar çalıştır
+2. Notebook'un en altındaki restore hücresinde `RESTORE_RUN_ID` ve `RESTORE_STAGE` alanlarını doldur
+3. Kaldığın yerden devam et
+
 **Önemli:** Bölüm 1b'deki **smoke test** hücresi (~10 sn) ilk önce çalışsın. 4 testin de PASS olmalı. Bu pipeline'ın bozulmadığını doğrular — saatler harcamadan önce. FAIL alırsan Zübeyr'e haber ver.
 
 Tahmini süreler:
