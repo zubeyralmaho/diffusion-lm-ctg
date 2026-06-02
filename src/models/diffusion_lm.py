@@ -170,16 +170,29 @@ class DiffusionLM(nn.Module):
         if prefix_emb is not None:
             x[:, :P] = prefix_emb
 
+        alpha_bar = self.schedule.alpha_bar.to(device)
         timesteps = torch.linspace(
             self.schedule.T - 1, 0, ddim_steps, dtype=torch.long, device=device
         )
-        for t in timesteps:
+        for index, t in enumerate(timesteps):
             t_batch = t.expand(B)
             x0_hat = self.predict_x0(x, t_batch)
             # Clamp prefix every step so the condition cannot drift.
             if prefix_emb is not None:
                 x0_hat[:, :P] = prefix_emb
-            x = x0_hat
+
+            if index == len(timesteps) - 1:
+                x = x0_hat
+                continue
+
+            next_t = timesteps[index + 1]
+            ab_t = alpha_bar[t].view(1, 1, 1)
+            ab_next = alpha_bar[next_t].view(1, 1, 1)
+            denom = torch.sqrt((1.0 - ab_t).clamp_min(1e-6))
+            eps_hat = (x - torch.sqrt(ab_t) * x0_hat) / denom
+            x = torch.sqrt(ab_next) * x0_hat + torch.sqrt((1.0 - ab_next).clamp_min(1e-6)) * eps_hat
+            if prefix_emb is not None:
+                x[:, :P] = prefix_emb
 
         logits = self.lm_head(x)
         ids = logits.argmax(dim=-1)
