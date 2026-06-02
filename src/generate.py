@@ -34,6 +34,20 @@ def _present_slots(slots: dict | None) -> dict[str, str]:
     }
 
 
+def _decode_diffusion_target(tok, token_ids: torch.Tensor) -> str:
+    stop_ids = {
+        token_id
+        for token_id in (tok.sep_token_id, tok.eos_token_id, tok.pad_token_id)
+        if token_id is not None
+    }
+    trimmed_ids = []
+    for token_id in token_ids.tolist():
+        if token_id in stop_ids:
+            break
+        trimmed_ids.append(token_id)
+    return tok.decode(trimmed_ids, skip_special_tokens=True).strip()
+
+
 _EPOCH_RE = re.compile(r"checkpoint_epoch(\d+)\.pt$")
 
 
@@ -138,7 +152,7 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
             ddim_steps=cfg["generate"]["ddim_steps"],
         )
         target_ids = ids[0, prefix_len:]
-        preds.append(tok.decode(target_ids, skip_special_tokens=True).strip())
+        preds.append(_decode_diffusion_target(tok, target_ids))
     return preds
 
 

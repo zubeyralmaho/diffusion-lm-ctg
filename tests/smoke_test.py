@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data.e2e import parse_mr, slots_to_prompt  # noqa: E402
 from src.evaluate import compute_metrics  # noqa: E402
 from src.generate import find_diffusion_checkpoint  # noqa: E402
+from src.train import encode_diffusion_example  # noqa: E402
 from src.models.diffusion_lm import DiffusionLM, NoiseSchedule  # noqa: E402
 
 
@@ -123,6 +124,36 @@ def test_diffusion_checkpoint_selection() -> None:
     print("  ✓ diffusion checkpoint selection prefers best, then highest epoch")
 
 
+class DummyTokenizer:
+    pad_token_id = 0
+    sep_token_id = 99
+    eos_token_id = None
+
+    def __call__(self, text: str, truncation: bool, max_length: int, padding: str | None = None, add_special_tokens: bool = False):
+        del truncation, add_special_tokens
+        ids = list(range(1, min(len(text.split()), max_length) + 1))
+        if padding == "max_length":
+            ids = ids + [self.pad_token_id] * (max_length - len(ids))
+        return {"input_ids": ids}
+
+
+def test_diffusion_encoding_masks_padding() -> None:
+    tok = DummyTokenizer()
+    out = encode_diffusion_example(
+        {
+            "mr_text": "name: Blue Spice | area: city centre",
+            "reference": "Blue Spice",
+        },
+        tok,
+        prefix_len=4,
+        target_len=6,
+    )
+    assert out["input_ids"][:4] == [1, 2, 3, 4]
+    assert out["input_ids"][4:10] == [1, 2, 99, 0, 0, 0]
+    assert out["target_mask"] == [0, 0, 0, 0, 1, 1, 1, 0, 0, 0]
+    print("  ✓ diffusion encoding masks padded target positions")
+
+
 def main() -> int:
     print("Smoke test:")
     tests = [
@@ -131,6 +162,7 @@ def main() -> int:
         test_diffusion_lm_forward_and_sample,
         test_compute_metrics,
         test_diffusion_checkpoint_selection,
+        test_diffusion_encoding_masks_padding,
     ]
     failed = 0
     for t in tests:

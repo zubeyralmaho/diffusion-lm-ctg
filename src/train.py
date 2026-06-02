@@ -47,6 +47,41 @@ def collate_diffusion_batch(features: list[dict[str, list[int]]]) -> dict[str, t
     }
 
 
+def encode_diffusion_example(ex: dict, tok, prefix_len: int, target_len: int) -> dict[str, list[int]]:
+    prefix_ids = tok(
+        ex["mr_text"],
+        truncation=True,
+        max_length=prefix_len,
+        padding="max_length",
+        add_special_tokens=False,
+    )["input_ids"]
+
+    pad_token_id = tok.pad_token_id
+    if pad_token_id is None:
+        raise ValueError("Diffusion tokenizer must define a pad_token_id.")
+
+    end_token_id = tok.sep_token_id if tok.sep_token_id is not None else tok.eos_token_id
+    max_target_tokens = target_len - 1 if end_token_id is not None else target_len
+    target_ids = tok(
+        ex["reference"],
+        truncation=True,
+        max_length=max_target_tokens,
+        add_special_tokens=False,
+    )["input_ids"]
+
+    if end_token_id is not None:
+        target_ids = target_ids + [end_token_id]
+
+    target_ids = target_ids[:target_len]
+    actual_target_len = len(target_ids)
+    padded_target_ids = target_ids + [pad_token_id] * (target_len - actual_target_len)
+
+    return {
+        "input_ids": prefix_ids + padded_target_ids,
+        "target_mask": [0] * prefix_len + [1] * actual_target_len + [0] * (target_len - actual_target_len),
+    }
+
+
 def diffusion_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
@@ -157,23 +192,7 @@ def train_diffusion_lm(cfg: dict) -> None:
     target_len = max_len - prefix_len
 
     def encode(ex):
-        prefix = tok(
-            ex["mr_text"],
-            truncation=True,
-            max_length=prefix_len,
-            padding="max_length",
-            add_special_tokens=False,
-        )["input_ids"]
-        target = tok(
-            ex["reference"],
-            truncation=True,
-            max_length=target_len,
-            padding="max_length",
-            add_special_tokens=False,
-        )["input_ids"]
-        input_ids = prefix + target
-        target_mask = [0] * prefix_len + [1] * target_len
-        return {"input_ids": input_ids, "target_mask": target_mask}
+        return encode_diffusion_example(ex, tok, prefix_len, target_len)
 
     train_ds = load_e2e("train").map(encode, remove_columns=["mr_text", "slots", "reference"])
     val_ds = load_e2e("validation").map(encode, remove_columns=["mr_text", "slots", "reference"])
