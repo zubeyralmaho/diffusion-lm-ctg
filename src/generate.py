@@ -24,6 +24,16 @@ def _device() -> str:
     return "cpu"
 
 
+def _present_slots(slots: dict | None) -> dict[str, str]:
+    if not slots:
+        return {}
+    return {
+        key: value
+        for key, value in slots.items()
+        if isinstance(value, str) and value.strip()
+    }
+
+
 _EPOCH_RE = re.compile(r"checkpoint_epoch(\d+)\.pt$")
 
 
@@ -165,7 +175,7 @@ def main() -> None:
         for ex, p in zip(examples, preds):
             f.write(json.dumps({
                 "mr_text": ex["mr_text"],
-                "slots": ex["slots"],
+                "slots": _present_slots(ex["slots"]),
                 "prediction": p,
                 "reference": ex["reference"],
             }) + "\n")

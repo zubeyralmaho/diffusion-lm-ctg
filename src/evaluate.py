@@ -22,12 +22,22 @@ def distinct_n(texts: list[str], n: int = 2) -> float:
     return len(ngrams) / max(total, 1)
 
 
+def present_slots(slots: dict | None) -> dict[str, str]:
+    if not slots:
+        return {}
+    return {
+        key: value.strip()
+        for key, value in slots.items()
+        if isinstance(value, str) and value.strip()
+    }
+
+
 def slot_accuracy(records: list[dict]) -> float:
     """Fraction of slot values that appear verbatim in the generated text."""
     correct = total = 0
     for r in records:
-        pred = r["prediction"].lower()
-        for _slot, value in r.get("slots", {}).items():
+        pred = str(r["prediction"]).lower()
+        for value in present_slots(r.get("slots", {})).values():
             total += 1
             if value.lower() in pred:
                 correct += 1

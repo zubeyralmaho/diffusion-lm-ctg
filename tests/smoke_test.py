@@ -84,13 +84,13 @@ def test_compute_metrics() -> None:
     records = [
         {
             "mr_text": "name: The Eagle | food: Italian",
-            "slots": {"name": "The Eagle", "food": "Italian"},
+            "slots": {"name": "The Eagle", "food": "Italian", "area": None},
             "prediction": "The Eagle is an Italian restaurant.",
             "reference": "The Eagle serves Italian food.",
         },
         {
             "mr_text": "name: Loch Fyne | food: Japanese",
-            "slots": {"name": "Loch Fyne", "food": "Japanese"},
+            "slots": {"name": "Loch Fyne", "food": "Japanese", "near": None},
             "prediction": "Loch Fyne offers Japanese cuisine.",
             "reference": "Loch Fyne is a Japanese restaurant.",
         },
