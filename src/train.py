@@ -40,6 +40,13 @@ def evaluate_diffusion(model: DiffusionLM, loader: DataLoader, device: str) -> f
     return running / max(len(loader), 1)
 
 
+def collate_diffusion_batch(features: list[dict[str, list[int]]]) -> dict[str, torch.Tensor]:
+    return {
+        "input_ids": torch.tensor([feature["input_ids"] for feature in features], dtype=torch.long),
+        "target_mask": torch.tensor([feature["target_mask"] for feature in features], dtype=torch.long),
+    }
+
+
 def diffusion_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
@@ -169,9 +176,7 @@ def train_diffusion_lm(cfg: dict) -> None:
         return {"input_ids": input_ids, "target_mask": target_mask}
 
     train_ds = load_e2e("train").map(encode, remove_columns=["mr_text", "slots", "reference"])
-    train_ds.set_format("torch", columns=["input_ids", "target_mask"])
     val_ds = load_e2e("validation").map(encode, remove_columns=["mr_text", "slots", "reference"])
-    val_ds.set_format("torch", columns=["input_ids", "target_mask"])
 
     model = DiffusionLM(
         vocab_size=tok.vocab_size,
@@ -184,8 +189,18 @@ def train_diffusion_lm(cfg: dict) -> None:
         noise_schedule=cfg["diffusion"].get("noise_schedule", "sqrt"),
     ).to(device)
 
-    loader = DataLoader(train_ds, batch_size=cfg["data"]["batch_size"], shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg["data"]["batch_size"], shuffle=False)
+    loader = DataLoader(
+        train_ds,
+        batch_size=cfg["data"]["batch_size"],
+        shuffle=True,
+        collate_fn=collate_diffusion_batch,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=cfg["data"]["batch_size"],
+        shuffle=False,
+        collate_fn=collate_diffusion_batch,
+    )
     optim = torch.optim.AdamW(model.parameters(), lr=cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"])
     total_steps = len(loader) * cfg["train"]["epochs"]
     sched = get_linear_schedule_with_warmup(optim, cfg["train"]["warmup_steps"], total_steps)
