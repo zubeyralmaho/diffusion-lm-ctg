@@ -1,0 +1,8 @@
+{
+  "bleu": 13.47,
+  "rougeL": 33.75,
+  "distinct_1": 0.0098,
+  "distinct_2": 0.0809,
+  "slot_accuracy": 0.8887,
+  "n_examples": 4693
+}
