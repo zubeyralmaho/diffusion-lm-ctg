@@ -79,9 +79,18 @@ class DiffusionLM(nn.Module):
         max_length: int = 64,
         num_timesteps: int = 2000,
         noise_schedule: str = "sqrt",
+        embedding_init: torch.Tensor | None = None,
     ):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        if embedding_init is not None:
+            if embedding_init.shape != self.embedding.weight.shape:
+                raise ValueError(
+                    f"embedding_init shape {tuple(embedding_init.shape)} does not match "
+                    f"embedding table shape {tuple(self.embedding.weight.shape)}"
+                )
+            with torch.no_grad():
+                self.embedding.weight.copy_(embedding_init)
         self.pos_embed = nn.Embedding(max_length, hidden_dim)
         self.in_proj = nn.Linear(embedding_dim, hidden_dim)
         self.time_embed = nn.Sequential(
@@ -150,6 +159,7 @@ class DiffusionLM(nn.Module):
         length: int,
         prefix_ids: torch.Tensor | None = None,
         ddim_steps: int = 200,
+        rounding_interval: int | None = None,
         batch_size: int = 1,
     ) -> torch.Tensor:
         """Generate token ids. If `prefix_ids` is given (shape [B, P]), the
@@ -180,6 +190,14 @@ class DiffusionLM(nn.Module):
             # Clamp prefix every step so the condition cannot drift.
             if prefix_emb is not None:
                 x0_hat[:, :P] = prefix_emb
+
+            if rounding_interval and rounding_interval > 0 and (
+                index == len(timesteps) - 1 or (index + 1) % rounding_interval == 0
+            ):
+                rounded_ids = self.lm_head(x0_hat).argmax(dim=-1)
+                x0_hat = self.embedding(rounded_ids)
+                if prefix_emb is not None:
+                    x0_hat[:, :P] = prefix_emb
 
             if index == len(timesteps) - 1:
                 x = x0_hat

@@ -9,6 +9,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 from transformers import (
+    AutoModel,
     DataCollatorForLanguageModeling,
     DataCollatorForSeq2Seq,
     Seq2SeqTrainer,
@@ -187,6 +188,17 @@ def train_diffusion_lm(cfg: dict) -> None:
 
     device = diffusion_device()
     tok = AutoTokenizer.from_pretrained(cfg["model"]["tokenizer"])
+    embedding_init = None
+    if cfg["model"].get("init_from_tokenizer_embeddings", False):
+        token_model = AutoModel.from_pretrained(cfg["model"]["tokenizer"])
+        embedding_init = token_model.get_input_embeddings().weight.detach().cpu()
+        cfg["model"]["embedding_dim"] = int(embedding_init.size(1))
+        print(
+            "Initializing diffusion token embeddings from",
+            cfg["model"]["tokenizer"],
+            f"({cfg['model']['embedding_dim']} dims)",
+        )
+        del token_model
     max_len = cfg["data"]["max_length"]
     prefix_len = cfg["data"].get("prefix_length", max_len // 2)
     target_len = max_len - prefix_len
@@ -206,6 +218,7 @@ def train_diffusion_lm(cfg: dict) -> None:
         max_length=max_len,
         num_timesteps=cfg["diffusion"]["num_timesteps"],
         noise_schedule=cfg["diffusion"].get("noise_schedule", "sqrt"),
+        embedding_init=embedding_init,
     ).to(device)
 
     loader = DataLoader(

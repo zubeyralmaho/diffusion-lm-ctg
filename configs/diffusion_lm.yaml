@@ -1,12 +1,13 @@
 name: diffusion_lm
 model:
   type: diffusion_lm
-  embedding_dim: 128
+  embedding_dim: 768
   hidden_dim: 512
   num_layers: 6
   num_heads: 8
   vocab_size: 30522        # bert-base-uncased tokenizer
   tokenizer: bert-base-uncased
+  init_from_tokenizer_embeddings: true
 diffusion:
   num_timesteps: 2000
   noise_schedule: sqrt     # Diffusion-LM uses sqrt schedule
@@ -25,6 +26,7 @@ train:
 generate:
   num_samples: 5
   ddim_steps: 200
+  rounding_interval: 10
   classifier_guidance_scale: 0.0
   controllable:
     enabled: true

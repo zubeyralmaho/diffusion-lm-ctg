@@ -117,24 +117,33 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
     ckpt_dir = Path(cfg["train"]["output_dir"])
     ckpt_path = find_diffusion_checkpoint(ckpt_dir)
     payload = torch.load(ckpt_path, map_location=_device())
+    saved_cfg = payload.get("config", cfg)
     tok = AutoTokenizer.from_pretrained(ckpt_dir)
 
     model = DiffusionLM(
         vocab_size=tok.vocab_size,
-        embedding_dim=cfg["model"]["embedding_dim"],
-        hidden_dim=cfg["model"]["hidden_dim"],
-        num_layers=cfg["model"]["num_layers"],
-        num_heads=cfg["model"]["num_heads"],
-        max_length=cfg["data"]["max_length"],
-        num_timesteps=cfg["diffusion"]["num_timesteps"],
-        noise_schedule=cfg["diffusion"].get("noise_schedule", "sqrt"),
+        embedding_dim=saved_cfg["model"]["embedding_dim"],
+        hidden_dim=saved_cfg["model"]["hidden_dim"],
+        num_layers=saved_cfg["model"]["num_layers"],
+        num_heads=saved_cfg["model"]["num_heads"],
+        max_length=saved_cfg["data"]["max_length"],
+        num_timesteps=saved_cfg["diffusion"]["num_timesteps"],
+        noise_schedule=saved_cfg["diffusion"].get("noise_schedule", "sqrt"),
     ).to(_device())
     model.load_state_dict(payload["model"])
     model.eval()
     print(f"Loading diffusion checkpoint: {ckpt_path.name}")
 
-    max_len = cfg["data"]["max_length"]
-    prefix_len = cfg["data"].get("prefix_length", max_len // 2)
+    max_len = saved_cfg["data"]["max_length"]
+    prefix_len = saved_cfg["data"].get("prefix_length", max_len // 2)
+    ddim_steps = cfg["generate"].get(
+        "ddim_steps",
+        saved_cfg.get("generate", {}).get("ddim_steps", 200),
+    )
+    rounding_interval = cfg["generate"].get(
+        "rounding_interval",
+        saved_cfg.get("generate", {}).get("rounding_interval"),
+    )
 
     preds = []
     for ex in tqdm(examples, desc="diffusion_lm"):
@@ -149,7 +158,8 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
         ids = model.sample(
             length=max_len,
             prefix_ids=prefix_ids,
-            ddim_steps=cfg["generate"]["ddim_steps"],
+            ddim_steps=ddim_steps,
+            rounding_interval=rounding_interval,
         )
         target_ids = ids[0, prefix_len:]
         preds.append(_decode_diffusion_target(tok, target_ids))
