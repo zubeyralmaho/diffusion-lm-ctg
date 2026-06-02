@@ -43,7 +43,9 @@ bash scripts/prepare_data.sh
 ## Setup (Google Colab)
 
 Open `notebooks/colab_train.ipynb` in Colab. The first cell clones this repo
-and installs dependencies. A T4 GPU is sufficient for the E2E experiments.
+and installs dependencies. If the repo already exists in the runtime, the cell
+pulls the latest committed changes before installing dependencies. A T4 GPU is
+sufficient for the E2E experiments.
 
 ## Reproducing Results
 
@@ -61,6 +63,18 @@ python -m src.train --config configs/diffusion_lm.yaml
 # 4. Generate and evaluate
 bash scripts/run_eval.sh
 ```
+
+## Diffusion Notes
+
+The diffusion pipeline relies on three implementation details that matter for
+quality:
+
+- sampling uses a deterministic DDIM-style reverse update rather than repeatedly overwriting `x <- x0_hat`
+- padded target positions are excluded from the diffusion loss
+- diffusion token embeddings are initialized from the pretrained BERT tokenizer embeddings
+
+Because of these fixes, any diffusion checkpoints trained before these changes
+should be discarded and retrained from scratch.
 
 Metrics land in `results/metrics/` as JSON; generated samples in
 `results/generations/`.

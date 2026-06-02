@@ -16,6 +16,8 @@ sonuçları geri göndermen** lazım.
 
 [colab.research.google.com](https://colab.research.google.com) → File → Open notebook → GitHub sekmesi → `zubeyralmaho/diffusion-lm-ctg` yaz → `notebooks/colab_train.ipynb` seç.
 
+Notebook setup hücresi artık repo zaten varsa `git pull --ff-only` yapar; yani Colab oturumunda en güncel kodu çekmeye çalışır.
+
 ### 2. GPU seç
 
 Runtime → Change runtime type → **A100** (varsa) veya **L4**, yoksa T4.
@@ -48,6 +50,12 @@ Eğer Colab runtime'ı düşerse yeni oturumda sadece şu sırayı izle:
 1. 0b, 1 ve 1b hücrelerini tekrar çalıştır
 2. Notebook'un en altındaki restore hücresinde `RESTORE_RUN_ID` ve `RESTORE_STAGE` alanlarını doldur
 3. Kaldığın yerden devam et
+
+Diffusion-LM için ek not:
+
+- Son düzeltmeler sampler, target-mask ve pretrained embedding initialization tarafında yapıldı.
+- Bu nedenle eski diffusion checkpoint'leri geçerli kabul edilmemeli.
+- Notebook'taki diffusion hücresi eski `checkpoints/diffusion_lm` klasörünü ve diffusion output'larını temizleyip sıfırdan koşar.
 
 **Önemli:** Bölüm 1b'deki **smoke test** hücresi (~10 sn) ilk önce çalışsın. 4 testin de PASS olmalı. Bu pipeline'ın bozulmadığını doğrular — saatler harcamadan önce. FAIL alırsan Zübeyr'e haber ver.
 
