@@ -1,94 +1,103 @@
-# Berkay için — Colab Eğitim Handoff'u
+# Colab Pro+ Runbook — Kendi Notlarım
 
-Selam Berkay. Bu repo CENG 467 dönem projesi (Controllable Text Generation via
-Diffusion Models). Tüm kod hazır, sadece **Colab Pro'da eğitimleri çalıştırıp
-sonuçları geri göndermen** lazım.
+CENG 467 dönem projesi (Controllable Text Generation via Diffusion Models).
+Tüm kod hazır; bu döküman Colab Pro+ üzerinde eğitimi koşarken kendime
+hatırlatıcı.
 
-## Yapacakların — özet
+## Akış — özet
 
-1. Colab Pro'da `notebooks/colab_train.ipynb` aç (T4/A100/L4 fark etmez, A100 varsa süper)
+1. Colab Pro+'ta `notebooks/colab_train.ipynb` aç (A100 tercih)
 2. Hücreleri sırayla çalıştır
-3. En son hücre `results.zip` üretir — onu indir, Zübeyr'e (WhatsApp / Drive) gönder
+3. En son hücre `results.zip` üretir — indir, repo'daki `results/`'a koy
 
 ## Adım adım
 
 ### 1. Notebook'u aç
 
-[colab.research.google.com](https://colab.research.google.com) → File → Open notebook → GitHub sekmesi → `zubeyralmaho/diffusion-lm-ctg` yaz → `notebooks/colab_train.ipynb` seç.
+[colab.research.google.com](https://colab.research.google.com) → File → Open
+notebook → GitHub sekmesi → `zubeyralmaho/diffusion-lm-ctg` →
+`notebooks/colab_train.ipynb`.
 
-Notebook setup hücresi artık repo zaten varsa `git pull --ff-only` yapar; yani Colab oturumunda en güncel kodu çekmeye çalışır.
+Setup hücresi repo zaten varsa `git pull --ff-only` ile en güncel commit'i
+çeker.
 
 ### 2. GPU seç
 
-Runtime → Change runtime type → **A100** (varsa) veya **L4**, yoksa T4.
+Runtime → Change runtime type → **A100** (Pro+ ile öncelikli erişim var),
+yoksa L4. Background execution Pro+'ta açık; uzun ablation koşusu için
+bunu aktif et.
 
 ### 3. Hücreleri çalıştır
 
-Sırayla, üstten aşağı. Her hücre öncekinin bitmesini bekler.
+Sırayla, üstten aşağı. İki güvenlik katmanı:
 
-Yeni notebook akışında iki önemli güvenlik katmanı var:
-
-- Her major stage sonunda artifact snapshot'ı otomatik olarak Google Drive altına kaydedilir.
-- Her komut canlı log verir; ayrıca exit code ve süre bilgisi Drive'da status JSON olarak tutulur.
+- Her major stage sonunda artifact snapshot'ı Google Drive altına yazılır.
+- Her komut canlı log verir; exit code ve süre Drive'da status JSON olarak
+  tutulur.
 
 Bu yüzden **0b. Drive mount + run klasörü** hücresini atlama.
 
-Snapshot dizini şu formatta oluşur:
+Snapshot dizini:
 
 ```text
 MyDrive/diffusion-lm-ctg-runs/<RUN_ID>/
 ```
 
-Altında üç önemli klasör bulunur:
+İçinde:
 
 - `status/` — her stage için süre ve exit code
 - `artifacts/` — checkpoint, generation, metric ve zip snapshot'ları
-- `logs/` — canlı komut çıktısının kaydı
+- `logs/` — canlı komut çıktısı
 
-Eğer Colab runtime'ı düşerse yeni oturumda sadece şu sırayı izle:
+Runtime düşerse yeni oturumda:
 
 1. 0b, 1 ve 1b hücrelerini tekrar çalıştır
-2. Notebook'un en altındaki restore hücresinde `RESTORE_RUN_ID` ve `RESTORE_STAGE` alanlarını doldur
+2. Notebook'un en altındaki restore hücresinde `RESTORE_RUN_ID` ve
+   `RESTORE_STAGE` alanlarını doldur
 3. Kaldığın yerden devam et
 
 Diffusion-LM için ek not:
 
-- Son düzeltmeler sampler, target-mask ve pretrained embedding initialization tarafında yapıldı.
-- Bu nedenle eski diffusion checkpoint'leri geçerli kabul edilmemeli.
-- Notebook'taki diffusion hücresi eski `checkpoints/diffusion_lm` klasörünü ve diffusion output'larını temizleyip sıfırdan koşar.
+- Son düzeltmeler: sampler, target-mask, pretrained embedding init,
+  self-conditioning, EMA ve classifier guidance.
+- Eski diffusion checkpoint'leri **geçersiz** — atılmalı.
+- Notebook'taki diffusion hücresi eski `checkpoints/diffusion_lm` klasörünü
+  ve diffusion output'larını temizleyip sıfırdan koşar.
 
-**Önemli:** Bölüm 1b'deki **smoke test** hücresi (~10 sn) ilk önce çalışsın. 4 testin de PASS olmalı. Bu pipeline'ın bozulmadığını doğrular — saatler harcamadan önce. FAIL alırsan Zübeyr'e haber ver.
+**Önemli:** Bölüm 1b'deki **smoke test** hücresi (~10 sn) önce çalışsın.
+4 testin de PASS olmalı. FAIL alırsam saatler harcamadan önce sebebini
+çözmem lazım.
 
-Tahmini süreler:
+Tahmini süreler (A100 / Pro+):
 
-| Hücre | T4 | A100 |
-|---|---|---|
-| Setup + clone + pip install | 2 dk | 2 dk |
-| `prepare_data.sh` | 1 dk | 1 dk |
-| GPT-2 baseline train (5 epoch) | 25 dk | 8 dk |
-| T5 baseline train (5 epoch) | 30 dk | 10 dk |
-| Diffusion-LM train (20 epoch) | 2-3 saat | 45 dk |
-| `run_eval.sh` (generation + metrikler) | 30 dk | 12 dk |
-| `run_ablations.sh` (5 ablation) | 3-4 saat | 1.5 saat |
-| **Toplam** | **~7 saat** | **~3 saat** |
+| Stage | A100 |
+|---|---|
+| Setup + clone + pip install | 2 dk |
+| `prepare_data.sh` | 1 dk |
+| GPT-2 baseline train (5 epoch) | 8 dk |
+| T5 baseline train (5 epoch) | 10 dk |
+| Diffusion-LM train (20 epoch) | 45 dk |
+| `run_eval.sh` (generation + metrikler) | 12 dk |
+| `run_ablations.sh` (5 ablation) | 1.5 saat |
+| **Toplam** | **~3 saat** |
 
 ### 4. Sonuç paketleme
 
-En son hücre `results.zip` indirir (içinde metrikler, generation örnekleri,
-özet tablo). Bu zip'i Zübeyr'e gönder.
+En son hücre `results.zip` üretir (metrikler, generation örnekleri, özet
+tablo). İndir, repo köküne `results/` olarak aç ve commit'le.
 
-Eğer checkpoint'leri de Drive'a almak istersen Drive mount hücresi var.
+Checkpoint'ler Drive'da snapshot olarak duruyor — gerekirse oradan çekilir.
 
 ## Sorun çıkarsa
 
-- **OOM (out of memory)**: ilgili config'de `batch_size`'ı yarıya düşür (örn. 64 → 32).
-- **Runtime disconnect**: Colab Pro'da nadir, ama olursa kaldığın hücreden devam et — checkpoint'ler her epoch sonunda kaydediliyor.
+- **OOM**: ilgili config'de `batch_size`'ı yarıya düşür (örn. 64 → 32).
+- **Runtime disconnect**: Pro+'ta nadir; background execution açıksa zaten
+  devam eder. Yoksa son checkpoint'ten devam et.
 - **`No module named X`**: ilk pip install hücresini tekrar çalıştır.
-- **Başka bir şey**: Zübeyr'e yaz, repo yapısını birlikte gözden geçiririz.
 
-## Eğer zamanın kısıtlıysa — minimum koşu
+## Minimum koşu (zaman kısıtlıysa)
 
-Tüm pipeline çok uzun gelirse **sadece şunları çalıştır** (~1.5 saat T4'te):
+~1.5 saat A100'de:
 
 1. Setup hücreleri
 2. `prepare_data.sh`
@@ -96,5 +105,6 @@ Tüm pipeline çok uzun gelirse **sadece şunları çalıştır** (~1.5 saat T4'
 4. T5 baseline train + eval
 5. Son zip hücresi
 
-Diffusion-LM ve ablation'ları Zübeyr ikinci oturumda yapar. Bu bile progress
-report için yeterli rakam verir.
+Diffusion-LM ve ablation'ları ikinci oturumda. Pro+ background execution
+ile bu ayrımı yapmaya gerek kalmayabilir — tek oturumda tüm pipeline
+geçer.
