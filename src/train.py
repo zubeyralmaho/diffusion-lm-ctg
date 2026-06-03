@@ -102,9 +102,17 @@ def encode_diffusion_example(
     actual_target_len = len(target_ids)
     padded_target_ids = target_ids + [pad_token_id] * (target_len - actual_target_len)
 
+    # The entire target region is masked as a diffusion target (including
+    # trailing pad tokens). This is critical: at inference the model
+    # initializes ALL target positions from pure noise, with no clean pad
+    # anchors. If we exclude pad positions from the loss at training time,
+    # the model never learns what to put there, and inference produces
+    # high-norm vocab noise across the unused tail. By including pad
+    # positions in the loss (CE target = pad_token_id), the model learns to
+    # emit pad in trailing positions, which decode then skips.
     encoded = {
         "input_ids": prefix_ids + padded_target_ids,
-        "target_mask": [0] * prefix_len + [1] * actual_target_len + [0] * (target_len - actual_target_len),
+        "target_mask": [0] * prefix_len + [1] * target_len,
     }
     if guidance_attribute is not None and guidance_label_to_id is not None:
         encoded["guidance_label"] = guidance_label_to_id.get(slot_value(ex.get("slots"), guidance_attribute), 0)
