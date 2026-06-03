@@ -48,6 +48,15 @@ def _decode_diffusion_target(tok, token_ids: torch.Tensor) -> str:
     return tok.decode(trimmed_ids, skip_special_tokens=True).strip()
 
 
+def _slot_value(slots: dict | None, attribute: str) -> str | None:
+    if not isinstance(slots, dict):
+        return None
+    value = slots.get(attribute)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 _EPOCH_RE = re.compile(r"checkpoint_epoch(\d+)\.pt$")
 
 
@@ -129,6 +138,12 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
         max_length=saved_cfg["data"]["max_length"],
         num_timesteps=saved_cfg["diffusion"]["num_timesteps"],
         noise_schedule=saved_cfg["diffusion"].get("noise_schedule", "sqrt"),
+        self_conditioning=saved_cfg["diffusion"].get("self_conditioning", False),
+        classifier_num_classes=len(
+            saved_cfg.get("diffusion", {}).get("classifier_guidance", {}).get("labels", [])
+        ) if saved_cfg.get("diffusion", {}).get("classifier_guidance", {}).get("enabled", False) else 0,
+        classifier_hidden_dim=saved_cfg.get("diffusion", {}).get("classifier_guidance", {}).get("hidden_dim"),
+        classifier_loss_weight=saved_cfg.get("diffusion", {}).get("classifier_guidance", {}).get("loss_weight", 0.0),
     ).to(_device())
     model.load_state_dict(payload["model"])
     model.eval()
@@ -144,25 +159,51 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
         "rounding_interval",
         saved_cfg.get("generate", {}).get("rounding_interval"),
     )
+    batch_size = cfg["generate"].get(
+        "batch_size",
+        saved_cfg.get("generate", {}).get("batch_size", 16),
+    )
+    guidance_scale = cfg["generate"].get(
+        "classifier_guidance_scale",
+        saved_cfg.get("generate", {}).get("classifier_guidance_scale", 0.0),
+    )
+    guidance_cfg = saved_cfg.get("diffusion", {}).get("classifier_guidance", {})
+    guidance_attribute = guidance_cfg.get("attribute") if guidance_cfg.get("enabled", False) else None
+    guidance_label_to_id = {
+        value: index for index, value in enumerate(guidance_cfg.get("labels", []))
+    }
 
     preds = []
-    for ex in tqdm(examples, desc="diffusion_lm"):
+    for start in tqdm(range(0, len(examples), batch_size), desc="diffusion_lm"):
+        batch_examples = examples[start : start + batch_size]
         prefix_ids = tok(
-            ex["mr_text"],
+            [ex["mr_text"] for ex in batch_examples],
             truncation=True,
             max_length=prefix_len,
             padding="max_length",
             add_special_tokens=False,
             return_tensors="pt",
         )["input_ids"].to(_device())
+        guidance_labels = None
+        if guidance_attribute and guidance_scale > 0.0 and guidance_label_to_id:
+            guidance_labels = torch.tensor(
+                [
+                    guidance_label_to_id.get(_slot_value(ex.get("slots"), guidance_attribute), 0)
+                    for ex in batch_examples
+                ],
+                device=prefix_ids.device,
+                dtype=torch.long,
+            )
         ids = model.sample(
             length=max_len,
             prefix_ids=prefix_ids,
             ddim_steps=ddim_steps,
             rounding_interval=rounding_interval,
+            guidance_labels=guidance_labels,
+            guidance_scale=guidance_scale,
         )
-        target_ids = ids[0, prefix_len:]
-        preds.append(_decode_diffusion_target(tok, target_ids))
+        for row in ids:
+            preds.append(_decode_diffusion_target(tok, row[prefix_len:]))
     return preds
 
 

@@ -1,15 +1,25 @@
 name: diffusion_lm_prefix16
 model:
   type: diffusion_lm
-  embedding_dim: 128
+  embedding_dim: 768
   hidden_dim: 512
   num_layers: 6
   num_heads: 8
   vocab_size: 30522
   tokenizer: bert-base-uncased
+  init_from_tokenizer_embeddings: true
 diffusion:
   num_timesteps: 2000
   noise_schedule: sqrt
+  self_conditioning: true
+  ema:
+    enabled: true
+    decay: 0.999
+  classifier_guidance:
+    enabled: true
+    attribute: food
+    hidden_dim: 256
+    loss_weight: 0.1
 data:
   dataset: e2e_nlg
   max_length: 96
@@ -23,4 +33,7 @@ train:
   output_dir: checkpoints/diffusion_lm_prefix16
 generate:
   num_samples: 5
+  batch_size: 16
   ddim_steps: 200
+  rounding_interval: 10
+  classifier_guidance_scale: 0.5

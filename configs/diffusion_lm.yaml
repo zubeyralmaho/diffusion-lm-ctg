@@ -12,6 +12,14 @@ diffusion:
   num_timesteps: 2000
   noise_schedule: sqrt     # Diffusion-LM uses sqrt schedule
   self_conditioning: true
+  ema:
+    enabled: true
+    decay: 0.999
+  classifier_guidance:
+    enabled: true
+    attribute: food
+    hidden_dim: 256
+    loss_weight: 0.1
 data:
   dataset: e2e_nlg
   max_length: 96
@@ -25,9 +33,10 @@ train:
   output_dir: checkpoints/diffusion_lm
 generate:
   num_samples: 5
+  batch_size: 16
   ddim_steps: 200
   rounding_interval: 10
-  classifier_guidance_scale: 0.0
+  classifier_guidance_scale: 0.5
   controllable:
     enabled: true
     attribute: food         # E2E slot to control

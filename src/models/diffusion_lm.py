@@ -80,8 +80,14 @@ class DiffusionLM(nn.Module):
         num_timesteps: int = 2000,
         noise_schedule: str = "sqrt",
         embedding_init: torch.Tensor | None = None,
+        self_conditioning: bool = False,
+        classifier_num_classes: int = 0,
+        classifier_hidden_dim: int | None = None,
+        classifier_loss_weight: float = 0.0,
     ):
         super().__init__()
+        self.self_conditioning = self_conditioning
+        self.classifier_loss_weight = classifier_loss_weight
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         if embedding_init is not None:
             if embedding_init.shape != self.embedding.weight.shape:
@@ -93,6 +99,7 @@ class DiffusionLM(nn.Module):
                 self.embedding.weight.copy_(embedding_init)
         self.pos_embed = nn.Embedding(max_length, hidden_dim)
         self.in_proj = nn.Linear(embedding_dim, hidden_dim)
+        self.self_cond_proj = nn.Linear(embedding_dim, hidden_dim) if self_conditioning else None
         self.time_embed = nn.Sequential(
             SinusoidalTimeEmbed(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
@@ -110,20 +117,51 @@ class DiffusionLM(nn.Module):
         self.out_proj = nn.Linear(hidden_dim, embedding_dim)
         self.lm_head = nn.Linear(embedding_dim, vocab_size, bias=False)
         self.lm_head.weight = self.embedding.weight
+        self.attribute_classifier = None
+        if classifier_num_classes > 0:
+            classifier_hidden_dim = classifier_hidden_dim or hidden_dim
+            self.attribute_classifier = nn.Sequential(
+                nn.Linear(embedding_dim, classifier_hidden_dim),
+                nn.SiLU(),
+                nn.Linear(classifier_hidden_dim, classifier_num_classes),
+            )
         self.schedule = NoiseSchedule(num_timesteps, kind=noise_schedule)
 
-    def predict_x0(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def predict_x0(
+        self,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        self_cond: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         B, L, _ = x_t.shape
         h = self.in_proj(x_t)
+        if self.self_cond_proj is not None:
+            if self_cond is None:
+                self_cond = torch.zeros_like(x_t)
+            h = h + self.self_cond_proj(self_cond)
         positions = torch.arange(L, device=x_t.device).unsqueeze(0).expand(B, L)
         h = h + self.pos_embed(positions) + self.time_embed(t).unsqueeze(1)
         h = self.transformer(h)
         return self.out_proj(h)
 
+    def predict_guidance_logits(
+        self,
+        x_t: torch.Tensor,
+        target_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if self.attribute_classifier is None:
+            raise RuntimeError("predict_guidance_logits called without an attribute classifier.")
+        if target_mask is None:
+            target_mask = torch.ones(x_t.size()[:2], device=x_t.device, dtype=torch.float)
+        m = target_mask.unsqueeze(-1).float()
+        pooled = (x_t * m).sum(dim=1) / m.sum(dim=1).clamp_min(1.0)
+        return self.attribute_classifier(pooled)
+
     def forward(
         self,
         input_ids: torch.Tensor,
         target_mask: torch.Tensor | None = None,
+        guidance_labels: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute loss. `target_mask` is 1 for positions to diffuse / score and
         0 for prefix (MR) positions, which are kept clean and excluded from
@@ -140,7 +178,13 @@ class DiffusionLM(nn.Module):
         # Clamp prefix positions to clean embeddings.
         x_t = m * x_t_target + (1.0 - m) * x0
 
-        x0_hat = self.predict_x0(x_t, t)
+        self_cond = None
+        if self.self_conditioning and torch.rand((), device=x0.device) < 0.5:
+            with torch.no_grad():
+                self_cond = self.predict_x0(x_t, t)
+                self_cond = m * self_cond + (1.0 - m) * x0
+
+        x0_hat = self.predict_x0(x_t, t, self_cond=self_cond)
 
         # Restrict both losses to target positions.
         mse = ((x0_hat - x0) ** 2 * m).sum() / m.sum().clamp_min(1.0) / x0.size(-1)
@@ -151,7 +195,12 @@ class DiffusionLM(nn.Module):
             reduction="none",
         )
         ce = (ce * target_mask.view(-1).float()).sum() / target_mask.sum().clamp_min(1.0)
-        return mse + ce
+        total = mse + ce
+        if self.attribute_classifier is not None and guidance_labels is not None:
+            cls_logits = self.predict_guidance_logits(x_t, target_mask)
+            cls_loss = F.cross_entropy(cls_logits, guidance_labels)
+            total = total + self.classifier_loss_weight * cls_loss
+        return total
 
     @torch.no_grad()
     def sample(
@@ -160,6 +209,8 @@ class DiffusionLM(nn.Module):
         prefix_ids: torch.Tensor | None = None,
         ddim_steps: int = 200,
         rounding_interval: int | None = None,
+        guidance_labels: torch.Tensor | None = None,
+        guidance_scale: float = 0.0,
         batch_size: int = 1,
     ) -> torch.Tensor:
         """Generate token ids. If `prefix_ids` is given (shape [B, P]), the
@@ -181,12 +232,37 @@ class DiffusionLM(nn.Module):
             x[:, :P] = prefix_emb
 
         alpha_bar = self.schedule.alpha_bar.to(device)
+        sample_target_mask = torch.cat(
+            [
+                torch.zeros(B, P, device=device, dtype=torch.float),
+                torch.ones(B, length - P, device=device, dtype=torch.float),
+            ],
+            dim=1,
+        )
         timesteps = torch.linspace(
             self.schedule.T - 1, 0, ddim_steps, dtype=torch.long, device=device
         )
+        self_cond = None
         for index, t in enumerate(timesteps):
+            if (
+                self.attribute_classifier is not None
+                and guidance_labels is not None
+                and guidance_scale > 0.0
+            ):
+                with torch.enable_grad():
+                    x_guided = x.detach().clone().requires_grad_(True)
+                    guided_logits = self.predict_guidance_logits(x_guided, sample_target_mask)
+                    guided_scores = F.log_softmax(guided_logits, dim=-1)
+                    selected = guided_scores.gather(1, guidance_labels.view(-1, 1)).sum()
+                    grad = torch.autograd.grad(selected, x_guided)[0]
+                grad[:, :P] = 0.0
+                grad_norm = grad.flatten(1).norm(dim=1).view(B, 1, 1).clamp_min(1e-6)
+                x = x + guidance_scale * grad / grad_norm
+                if prefix_emb is not None:
+                    x[:, :P] = prefix_emb
+
             t_batch = t.expand(B)
-            x0_hat = self.predict_x0(x, t_batch)
+            x0_hat = self.predict_x0(x, t_batch, self_cond=self_cond)
             # Clamp prefix every step so the condition cannot drift.
             if prefix_emb is not None:
                 x0_hat[:, :P] = prefix_emb
@@ -198,6 +274,9 @@ class DiffusionLM(nn.Module):
                 x0_hat = self.embedding(rounded_ids)
                 if prefix_emb is not None:
                     x0_hat[:, :P] = prefix_emb
+
+            if self.self_conditioning:
+                self_cond = x0_hat.detach()
 
             if index == len(timesteps) - 1:
                 x = x0_hat

@@ -63,22 +63,33 @@ def test_diffusion_lm_forward_and_sample() -> None:
         num_heads=4,
         max_length=L,
         num_timesteps=100,
+        self_conditioning=True,
+        classifier_num_classes=3,
+        classifier_hidden_dim=32,
+        classifier_loss_weight=0.2,
     )
 
     input_ids = torch.randint(0, vocab, (B, L))
     target_mask = torch.cat(
         [torch.zeros(B, P, dtype=torch.long), torch.ones(B, L - P, dtype=torch.long)], dim=1
     )
-    loss = model(input_ids, target_mask=target_mask)
+    guidance_labels = torch.tensor([0, 1, 2, 1])
+    loss = model(input_ids, target_mask=target_mask, guidance_labels=guidance_labels)
     assert torch.isfinite(loss), f"loss not finite: {loss}"
     loss.backward()  # gradients must flow
     print(f"  ✓ Diffusion-LM forward + backward (loss={loss.item():.3f})")
 
     prefix = torch.randint(0, vocab, (2, P))
-    out = model.sample(length=L, prefix_ids=prefix, ddim_steps=5)
+    out = model.sample(
+        length=L,
+        prefix_ids=prefix,
+        ddim_steps=5,
+        guidance_labels=torch.tensor([1, 2]),
+        guidance_scale=0.1,
+    )
     assert out.shape == (2, L), out.shape
     assert (out[:, :P] == prefix).all(), "prefix not clamped in output"
-    print(f"  ✓ Diffusion-LM sample with prefix clamping (shape={tuple(out.shape)})")
+    print(f"  ✓ Diffusion-LM sample with self-conditioning/guidance (shape={tuple(out.shape)})")
 
 
 def test_compute_metrics() -> None:
