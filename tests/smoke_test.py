@@ -148,7 +148,14 @@ class DummyTokenizer:
         return {"input_ids": ids}
 
 
-def test_diffusion_encoding_masks_padding() -> None:
+def test_diffusion_encoding_target_window() -> None:
+    """Target mask spans the entire target window (including trailing pads).
+
+    This is critical for inference: at sampling time the model initializes
+    all target positions from pure noise with no clean pad anchors. The CE
+    loss on pad positions teaches the model to emit pad in the trailing
+    region; without it, inference produces high-norm vocab noise.
+    """
     tok = DummyTokenizer()
     out = encode_diffusion_example(
         {
@@ -161,8 +168,9 @@ def test_diffusion_encoding_masks_padding() -> None:
     )
     assert out["input_ids"][:4] == [1, 2, 3, 4]
     assert out["input_ids"][4:10] == [1, 2, 99, 0, 0, 0]
-    assert out["target_mask"] == [0, 0, 0, 0, 1, 1, 1, 0, 0, 0]
-    print("  ✓ diffusion encoding masks padded target positions")
+    # mask=1 across all 6 target positions, including the 3 trailing pads
+    assert out["target_mask"] == [0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+    print("  ✓ diffusion encoding masks the full target window (including pad)")
 
 
 def main() -> int:
@@ -173,7 +181,7 @@ def main() -> int:
         test_diffusion_lm_forward_and_sample,
         test_compute_metrics,
         test_diffusion_checkpoint_selection,
-        test_diffusion_encoding_masks_padding,
+        test_diffusion_encoding_target_window,
     ]
     failed = 0
     for t in tests:
