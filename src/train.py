@@ -267,6 +267,22 @@ def train_diffusion_lm(cfg: dict) -> None:
     if cfg["model"].get("init_from_tokenizer_embeddings", False):
         token_model = AutoModel.from_pretrained(cfg["model"]["tokenizer"])
         embedding_init = token_model.get_input_embeddings().weight.detach().cpu()
+        # Diffusion starts the target window from N(0, I) noise. Raw BERT
+        # embeddings have much smaller norm than a randomly initialized
+        # diffusion embedding table, so their signal is almost drowned out at
+        # moderate/high timesteps. Match the average row norm of PyTorch's
+        # default embedding init while preserving the pretrained geometry.
+        current_avg_norm = float(embedding_init.norm(dim=1).mean())
+        target_avg_norm = math.sqrt(float(embedding_init.size(1)))
+        if current_avg_norm > 0.0:
+            embedding_init_scale = target_avg_norm / current_avg_norm
+            embedding_init = embedding_init * embedding_init_scale
+            cfg["model"]["embedding_init_scale"] = embedding_init_scale
+            print(
+                "Rescaling tokenizer embeddings by",
+                f"{embedding_init_scale:.2f}x",
+                f"(avg row norm {current_avg_norm:.2f} -> {target_avg_norm:.2f})",
+            )
         cfg["model"]["embedding_dim"] = int(embedding_init.size(1))
         print(
             "Initializing diffusion token embeddings from",

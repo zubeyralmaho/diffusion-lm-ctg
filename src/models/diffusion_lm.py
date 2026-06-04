@@ -146,7 +146,10 @@ class DiffusionLM(nn.Module):
             h = h + self.self_cond_proj(self_cond)
         positions = torch.arange(L, device=x_t.device).unsqueeze(0).expand(B, L)
         h = h + self.pos_embed(positions) + self.time_embed(t).unsqueeze(1)
-        h = self.transformer(h, src_key_padding_mask=pad_mask)
+        transformer_pad_mask = pad_mask
+        if transformer_pad_mask is not None and x_t.device.type == "mps":
+            transformer_pad_mask = None
+        h = self.transformer(h, src_key_padding_mask=transformer_pad_mask)
         return self.out_proj(h)
 
     def predict_guidance_logits(
