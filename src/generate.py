@@ -144,6 +144,8 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
         ) if saved_cfg.get("diffusion", {}).get("classifier_guidance", {}).get("enabled", False) else 0,
         classifier_hidden_dim=saved_cfg.get("diffusion", {}).get("classifier_guidance", {}).get("hidden_dim"),
         classifier_loss_weight=saved_cfg.get("diffusion", {}).get("classifier_guidance", {}).get("loss_weight", 0.0),
+        mse_lambda=saved_cfg.get("diffusion", {}).get("mse_lambda", 1.0),
+        pad_token_id=tok.pad_token_id,
     ).to(_device())
     model.load_state_dict(payload["model"])
     model.eval()

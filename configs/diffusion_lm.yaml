@@ -12,6 +12,10 @@ diffusion:
   num_timesteps: 2000
   noise_schedule: sqrt     # Diffusion-LM uses sqrt schedule
   self_conditioning: true
+  # Rescales the MSE denoising term so it is not swamped by the CE rounding
+  # loss.  With BERT 768-d embeddings the raw MSE is ~13 000x smaller than CE;
+  # mse_lambda=1000 brings the ratio to ~14x, comparable to the original paper.
+  mse_lambda: 1000.0
   ema:
     enabled: true
     decay: 0.999

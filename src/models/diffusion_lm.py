@@ -84,10 +84,14 @@ class DiffusionLM(nn.Module):
         classifier_num_classes: int = 0,
         classifier_hidden_dim: int | None = None,
         classifier_loss_weight: float = 0.0,
+        mse_lambda: float = 1.0,
+        pad_token_id: int | None = None,
     ):
         super().__init__()
         self.self_conditioning = self_conditioning
         self.classifier_loss_weight = classifier_loss_weight
+        self.mse_lambda = mse_lambda
+        self.pad_token_id = pad_token_id
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         if embedding_init is not None:
             if embedding_init.shape != self.embedding.weight.shape:
@@ -132,6 +136,7 @@ class DiffusionLM(nn.Module):
         x_t: torch.Tensor,
         t: torch.Tensor,
         self_cond: torch.Tensor | None = None,
+        pad_mask: torch.BoolTensor | None = None,
     ) -> torch.Tensor:
         B, L, _ = x_t.shape
         h = self.in_proj(x_t)
@@ -141,7 +146,7 @@ class DiffusionLM(nn.Module):
             h = h + self.self_cond_proj(self_cond)
         positions = torch.arange(L, device=x_t.device).unsqueeze(0).expand(B, L)
         h = h + self.pos_embed(positions) + self.time_embed(t).unsqueeze(1)
-        h = self.transformer(h)
+        h = self.transformer(h, src_key_padding_mask=pad_mask)
         return self.out_proj(h)
 
     def predict_guidance_logits(
@@ -161,33 +166,56 @@ class DiffusionLM(nn.Module):
         self,
         input_ids: torch.Tensor,
         target_mask: torch.Tensor | None = None,
+        noise_mask: torch.Tensor | None = None,
         guidance_labels: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute loss. `target_mask` is 1 for positions to diffuse / score and
-        0 for prefix (MR) positions, which are kept clean and excluded from
-        the loss. If None, the whole sequence is treated as target (uncond).
+        """Compute loss.
+
+        ``target_mask`` controls the LOSS: 1 on positions that contribute to
+        MSE/CE (typically the real reference tokens), 0 elsewhere.
+        ``noise_mask`` controls the FORWARD process: 1 on positions that get
+        noised (the entire target window, including trailing pads), 0 on
+        prefix positions which stay clean. If ``noise_mask`` is None, we
+        fall back to ``target_mask`` (legacy behavior, equivalent to the
+        single-mask design).
         """
         x0 = self.embedding(input_ids)
         if target_mask is None:
             target_mask = torch.ones_like(input_ids, dtype=torch.float)
-        m = target_mask.unsqueeze(-1).float()
+        if noise_mask is None:
+            noise_mask = target_mask
+        loss_m = target_mask.unsqueeze(-1).float()
+        noise_m = noise_mask.unsqueeze(-1).float()
+
+        # Prefix positions that hold PAD tokens carry no MR information and
+        # should be excluded from Transformer attention.
+        pad_mask: torch.BoolTensor | None = None
+        if self.pad_token_id is not None:
+            prefix_pad = (noise_mask == 0) & (input_ids == self.pad_token_id)
+            if prefix_pad.any():
+                pad_mask = prefix_pad
 
         t = torch.randint(0, self.schedule.T, (x0.size(0),), device=x0.device)
         noise = torch.randn_like(x0)
         x_t_target = self.schedule.q_sample(x0, t, noise)
-        # Clamp prefix positions to clean embeddings.
-        x_t = m * x_t_target + (1.0 - m) * x0
+        # Clamp prefix positions to clean embeddings; noise everything inside
+        # the target window (real tokens + trailing pads).
+        x_t = noise_m * x_t_target + (1.0 - noise_m) * x0
 
         self_cond = None
         if self.self_conditioning and torch.rand((), device=x0.device) < 0.5:
             with torch.no_grad():
-                self_cond = self.predict_x0(x_t, t)
-                self_cond = m * self_cond + (1.0 - m) * x0
+                self_cond = self.predict_x0(x_t, t, pad_mask=pad_mask)
+                self_cond = noise_m * self_cond + (1.0 - noise_m) * x0
 
-        x0_hat = self.predict_x0(x_t, t, self_cond=self_cond)
+        x0_hat = self.predict_x0(x_t, t, self_cond=self_cond, pad_mask=pad_mask)
 
-        # Restrict both losses to target positions.
-        mse = ((x0_hat - x0) ** 2 * m).sum() / m.sum().clamp_min(1.0) / x0.size(-1)
+        # Detach x0 when used as the MSE regression *target* so that the
+        # embedding table is not pulled toward x0_hat through the target side
+        # (moving-target instability).  Gradients still flow through the INPUT
+        # path (q_sample), which is the intended training signal.
+        x0_target = x0.detach()
+        mse = ((x0_hat - x0_target) ** 2 * loss_m).sum() / loss_m.sum().clamp_min(1.0) / x0.size(-1)
         logits = self.lm_head(x0_hat)
         ce = F.cross_entropy(
             logits.view(-1, logits.size(-1)),
@@ -195,9 +223,14 @@ class DiffusionLM(nn.Module):
             reduction="none",
         )
         ce = (ce * target_mask.view(-1).float()).sum() / target_mask.sum().clamp_min(1.0)
-        total = mse + ce
+        # mse_lambda rescales the denoising term so it is not swamped by CE.
+        # With BERT 768-d embeddings the raw MSE is ~13 000x smaller than CE;
+        # mse_lambda brings them to a comparable magnitude.
+        total = self.mse_lambda * mse + ce
         if self.attribute_classifier is not None and guidance_labels is not None:
-            cls_logits = self.predict_guidance_logits(x_t, target_mask)
+            # Pool over noise_mask: the classifier sees the full noisy
+            # target window, which matches the inference configuration.
+            cls_logits = self.predict_guidance_logits(x_t, noise_mask)
             cls_loss = F.cross_entropy(cls_logits, guidance_labels)
             total = total + self.classifier_loss_weight * cls_loss
         return total
@@ -242,6 +275,13 @@ class DiffusionLM(nn.Module):
         timesteps = torch.linspace(
             self.schedule.T - 1, 0, ddim_steps, dtype=torch.long, device=device
         )
+        # Build prefix-PAD mask once: True = position is ignored by attention.
+        pad_mask: torch.BoolTensor | None = None
+        if self.pad_token_id is not None and prefix_ids is not None:
+            prefix_is_pad = (prefix_ids.to(device) == self.pad_token_id)
+            if prefix_is_pad.any():
+                target_false = torch.zeros(B, length - P, dtype=torch.bool, device=device)
+                pad_mask = torch.cat([prefix_is_pad, target_false], dim=1)
         self_cond = None
         for index, t in enumerate(timesteps):
             if (
@@ -262,7 +302,7 @@ class DiffusionLM(nn.Module):
                     x[:, :P] = prefix_emb
 
             t_batch = t.expand(B)
-            x0_hat = self.predict_x0(x, t_batch, self_cond=self_cond)
+            x0_hat = self.predict_x0(x, t_batch, self_cond=self_cond, pad_mask=pad_mask)
             # Clamp prefix every step so the condition cannot drift.
             if prefix_emb is not None:
                 x0_hat[:, :P] = prefix_emb

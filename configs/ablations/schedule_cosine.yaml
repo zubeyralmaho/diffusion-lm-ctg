@@ -12,6 +12,7 @@ diffusion:
   num_timesteps: 2000
   noise_schedule: cosine
   self_conditioning: true
+  mse_lambda: 1000.0
   ema:
     enabled: true
     decay: 0.999

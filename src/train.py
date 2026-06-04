@@ -37,10 +37,18 @@ def evaluate_diffusion(model: DiffusionLM, loader: DataLoader, device: str) -> f
         for batch in loader:
             input_ids = batch["input_ids"].to(device)
             target_mask = batch["target_mask"].to(device)
+            noise_mask = batch.get("noise_mask")
+            if noise_mask is not None:
+                noise_mask = noise_mask.to(device)
             guidance_labels = batch.get("guidance_label")
             if guidance_labels is not None:
                 guidance_labels = guidance_labels.to(device)
-            loss = model(input_ids, target_mask=target_mask, guidance_labels=guidance_labels)
+            loss = model(
+                input_ids,
+                target_mask=target_mask,
+                noise_mask=noise_mask,
+                guidance_labels=guidance_labels,
+            )
             running += loss.item()
     return running / max(len(loader), 1)
 
@@ -50,6 +58,11 @@ def collate_diffusion_batch(features: list[dict[str, list[int]]]) -> dict[str, t
         "input_ids": torch.tensor([feature["input_ids"] for feature in features], dtype=torch.long),
         "target_mask": torch.tensor([feature["target_mask"] for feature in features], dtype=torch.long),
     }
+    # noise_mask is optional for backward compatibility with old encodings.
+    if "noise_mask" in features[0]:
+        batch["noise_mask"] = torch.tensor(
+            [feature["noise_mask"] for feature in features], dtype=torch.long
+        )
     if "guidance_label" in features[0]:
         batch["guidance_label"] = torch.tensor(
             [feature["guidance_label"] for feature in features], dtype=torch.long
@@ -102,17 +115,18 @@ def encode_diffusion_example(
     actual_target_len = len(target_ids)
     padded_target_ids = target_ids + [pad_token_id] * (target_len - actual_target_len)
 
-    # The entire target region is masked as a diffusion target (including
-    # trailing pad tokens). This is critical: at inference the model
-    # initializes ALL target positions from pure noise, with no clean pad
-    # anchors. If we exclude pad positions from the loss at training time,
-    # the model never learns what to put there, and inference produces
-    # high-norm vocab noise across the unused tail. By including pad
-    # positions in the loss (CE target = pad_token_id), the model learns to
-    # emit pad in trailing positions, which decode then skips.
+    # Two separate masks with distinct jobs:
+    # - noise_mask  : covers the ENTIRE target window (prefix=0, target+pads=1).
+    #   The forward process noises these positions; prefix stays clean.
+    # - target_mask : same extent as noise_mask.  CE and MSE are applied to
+    #   ALL target positions including trailing pads, so the model learns
+    #   to emit PAD tokens in the trailing region.  Without this signal the
+    #   model is never trained on what to produce past the actual text, and
+    #   at inference it generates high-norm vocab noise in those slots.
     encoded = {
         "input_ids": prefix_ids + padded_target_ids,
         "target_mask": [0] * prefix_len + [1] * target_len,
+        "noise_mask":  [0] * prefix_len + [1] * target_len,
     }
     if guidance_attribute is not None and guidance_label_to_id is not None:
         encoded["guidance_label"] = guidance_label_to_id.get(slot_value(ex.get("slots"), guidance_attribute), 0)
@@ -313,6 +327,8 @@ def train_diffusion_lm(cfg: dict) -> None:
         classifier_num_classes=classifier_num_classes,
         classifier_hidden_dim=classifier_hidden_dim,
         classifier_loss_weight=classifier_loss_weight,
+        mse_lambda=cfg["diffusion"].get("mse_lambda", 1.0),
+        pad_token_id=tok.pad_token_id,
     ).to(device)
     ema_model = build_ema_model(model) if ema_enabled else None
 
@@ -344,10 +360,18 @@ def train_diffusion_lm(cfg: dict) -> None:
         for batch in loader:
             input_ids = batch["input_ids"].to(device)
             target_mask = batch["target_mask"].to(device)
+            noise_mask = batch.get("noise_mask")
+            if noise_mask is not None:
+                noise_mask = noise_mask.to(device)
             guidance_labels = batch.get("guidance_label")
             if guidance_labels is not None:
                 guidance_labels = guidance_labels.to(device)
-            loss = model(input_ids, target_mask=target_mask, guidance_labels=guidance_labels)
+            loss = model(
+                input_ids,
+                target_mask=target_mask,
+                noise_mask=noise_mask,
+                guidance_labels=guidance_labels,
+            )
             optim.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
