@@ -1,0 +1,44 @@
+name: diffusion_crossattn
+# Cross-attention (encoder-decoder) diffusion baseline. A genuinely different
+# conditioning mechanism from our main model's prefix clamping: the MR is
+# encoded by a separate Transformer encoder and the diffusion denoiser is a
+# Transformer decoder that cross-attends to it. Conditioning style of
+# encoder-decoder / seq2seq diffusion (DiffuSeq, Gong et al. 2023).
+model:
+  type: diffusion_lm        # reuses the diffusion training/generation path
+  embedding_dim: 768
+  hidden_dim: 512
+  num_layers: 6             # decoder layers
+  num_heads: 8
+  vocab_size: 30522
+  tokenizer: bert-base-uncased
+  init_from_tokenizer_embeddings: true
+diffusion:
+  conditioning: cross_attn  # <-- selects CrossAttnDiffusionLM
+  num_timesteps: 2000
+  noise_schedule: sqrt
+  prediction_type: x0
+  self_conditioning: false
+  mse_lambda: 1000.0
+  ema:
+    enabled: true
+    decay: 0.999
+  classifier_guidance:
+    enabled: false          # cross-attn baseline isolates the conditioning mechanism
+data:
+  dataset: e2e_nlg
+  max_length: 96
+  prefix_length: 32
+  batch_size: 64
+train:
+  epochs: 20
+  lr: 1.0e-4
+  weight_decay: 0.0
+  warmup_steps: 1000
+  output_dir: checkpoints/diffusion_crossattn
+generate:
+  num_samples: 5
+  batch_size: 16
+  ddim_steps: 200
+  rounding_interval: 10
+  classifier_guidance_scale: 0.0

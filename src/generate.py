@@ -129,7 +129,13 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
     saved_cfg = payload.get("config", cfg)
     tok = AutoTokenizer.from_pretrained(ckpt_dir)
 
-    model = DiffusionLM(
+    conditioning = saved_cfg.get("diffusion", {}).get("conditioning", "prefix")
+    if conditioning == "cross_attn":
+        from src.models.diffusion_seq2seq import CrossAttnDiffusionLM
+        model_cls = CrossAttnDiffusionLM
+    else:
+        model_cls = DiffusionLM
+    model = model_cls(
         vocab_size=tok.vocab_size,
         embedding_dim=saved_cfg["model"]["embedding_dim"],
         hidden_dim=saved_cfg["model"]["hidden_dim"],

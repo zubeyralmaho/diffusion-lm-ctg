@@ -121,6 +121,39 @@ def test_diffusion_lm_eps_prediction() -> None:
     print(f"  ✓ Diffusion-LM eps-prediction forward + sample (loss={loss.item():.3f})")
 
 
+def test_crossattn_diffusion_forward_and_sample() -> None:
+    """Cross-attention diffusion baseline must train + sample without error."""
+    from src.models.diffusion_seq2seq import CrossAttnDiffusionLM
+
+    vocab, B, L, P = 200, 4, 16, 4
+    model = CrossAttnDiffusionLM(
+        vocab_size=vocab,
+        embedding_dim=32,
+        hidden_dim=64,
+        num_layers=2,
+        num_heads=4,
+        max_length=L,
+        num_timesteps=100,
+        encoder_layers=2,
+        mse_lambda=1.0,
+        pad_token_id=0,
+    )
+    input_ids = torch.randint(1, vocab, (B, L))
+    target_mask = torch.cat(
+        [torch.zeros(B, P, dtype=torch.long), torch.ones(B, L - P, dtype=torch.long)], dim=1
+    )
+    noise_mask = target_mask.clone()  # [0]*P + [1]*target_len
+    loss = model(input_ids, target_mask=target_mask, noise_mask=noise_mask)
+    assert torch.isfinite(loss), f"crossattn loss not finite: {loss}"
+    loss.backward()
+
+    prefix = torch.randint(1, vocab, (2, P))
+    out = model.sample(length=L, prefix_ids=prefix, ddim_steps=5)
+    assert out.shape == (2, L), out.shape
+    assert (out[:, :P] == prefix).all(), "MR prefix not preserved in output"
+    print(f"  ✓ Cross-attention diffusion forward + sample (loss={loss.item():.3f})")
+
+
 def test_compute_metrics() -> None:
     records = [
         {
@@ -209,6 +242,7 @@ def main() -> int:
         test_noise_schedules,
         test_diffusion_lm_forward_and_sample,
         test_diffusion_lm_eps_prediction,
+        test_crossattn_diffusion_forward_and_sample,
         test_compute_metrics,
         test_diffusion_checkpoint_selection,
         test_diffusion_encoding_target_window,

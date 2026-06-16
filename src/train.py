@@ -142,6 +142,23 @@ def build_guidance_label_values(dataset, attribute: str) -> list[str]:
     return ["<missing>"] + values
 
 
+def build_diffusion_model_cls(cfg: dict):
+    """Select the diffusion model class from the config.
+
+    diffusion.conditioning:
+      "prefix"     -> DiffusionLM (in-context prefix clamping; default)
+      "cross_attn" -> CrossAttnDiffusionLM (encoder-decoder, cross-attention
+                      conditioning; a genuinely different diffusion baseline).
+    """
+    conditioning = cfg.get("diffusion", {}).get("conditioning", "prefix")
+    if conditioning == "cross_attn":
+        from src.models.diffusion_seq2seq import CrossAttnDiffusionLM
+        return CrossAttnDiffusionLM
+    if conditioning == "prefix":
+        return DiffusionLM
+    raise ValueError(f"unknown diffusion.conditioning: {conditioning!r}")
+
+
 def build_ema_model(model: DiffusionLM) -> DiffusionLM:
     ema_model = copy.deepcopy(model)
     ema_model.eval()
@@ -329,7 +346,8 @@ def train_diffusion_lm(cfg: dict) -> None:
     train_ds = train_raw.map(encode, remove_columns=["mr_text", "slots", "reference"])
     val_ds = val_raw.map(encode, remove_columns=["mr_text", "slots", "reference"])
 
-    model = DiffusionLM(
+    model_cls = build_diffusion_model_cls(cfg)
+    model = model_cls(
         vocab_size=tok.vocab_size,
         embedding_dim=cfg["model"]["embedding_dim"],
         hidden_dim=cfg["model"]["hidden_dim"],
