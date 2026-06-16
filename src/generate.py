@@ -146,6 +146,7 @@ def gen_diffusion(cfg: dict, examples) -> list[str]:
         classifier_loss_weight=saved_cfg.get("diffusion", {}).get("classifier_guidance", {}).get("loss_weight", 0.0),
         mse_lambda=saved_cfg.get("diffusion", {}).get("mse_lambda", 1.0),
         pad_token_id=tok.pad_token_id,
+        prediction_type=saved_cfg.get("diffusion", {}).get("prediction_type", "x0"),
     ).to(_device())
     model.load_state_dict(payload["model"])
     model.eval()

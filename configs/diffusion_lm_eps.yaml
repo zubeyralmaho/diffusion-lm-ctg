@@ -1,0 +1,42 @@
+name: diffusion_lm_eps
+# Epsilon-prediction baseline: identical to diffusion_lm_vanilla except the
+# denoiser predicts the noise (classic DDPM parameterization) instead of the
+# clean embedding x0. Isolates the effect of the prediction target.
+# Note: eps-MSE has unit variance (O(1) per dim), so mse_lambda drops from
+# 1000 (needed for the tiny x0-MSE) to 1.0 to keep it comparable to the CE.
+model:
+  type: diffusion_lm
+  embedding_dim: 768
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  vocab_size: 30522
+  tokenizer: bert-base-uncased
+  init_from_tokenizer_embeddings: true
+diffusion:
+  num_timesteps: 2000
+  noise_schedule: sqrt
+  prediction_type: eps       # <-- the only methodological change vs vanilla
+  self_conditioning: false
+  mse_lambda: 1.0            # eps-MSE is O(1), no large rescale needed
+  ema:
+    enabled: false
+  classifier_guidance:
+    enabled: false
+data:
+  dataset: e2e_nlg
+  max_length: 96
+  prefix_length: 32
+  batch_size: 64
+train:
+  epochs: 20
+  lr: 1.0e-4
+  weight_decay: 0.0
+  warmup_steps: 1000
+  output_dir: checkpoints/diffusion_lm_eps
+generate:
+  num_samples: 5
+  batch_size: 16
+  ddim_steps: 200
+  rounding_interval: 10
+  classifier_guidance_scale: 0.0

@@ -345,6 +345,7 @@ def train_diffusion_lm(cfg: dict) -> None:
         classifier_loss_weight=classifier_loss_weight,
         mse_lambda=cfg["diffusion"].get("mse_lambda", 1.0),
         pad_token_id=tok.pad_token_id,
+        prediction_type=cfg["diffusion"].get("prediction_type", "x0"),
     ).to(device)
     ema_model = build_ema_model(model) if ema_enabled else None
 

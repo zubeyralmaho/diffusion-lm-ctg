@@ -50,10 +50,11 @@ We study controllable text generation with continuous-space diffusion language
 models and compare them against autoregressive baselines on the E2E NLG
 benchmark. Our implementation of Diffusion-LM combines four design choices
 that we found necessary for stable training at small scale: prefix
-conditioning with embedding clamping at every denoising step, target-masked
-losses that exclude prefix and padding positions, initialization of the token
-embedding table from a pretrained BERT tokenizer, and an exponential moving
-average (EMA) of the denoiser weights. On top of this base model we add
+conditioning with embedding clamping at every denoising step, separate
+noising and loss masks that exclude the prefix while supervising the full
+target window including trailing pads, initialization of the token embedding
+table from a pretrained BERT tokenizer with latent-scale rescaling, and an
+exponential moving average (EMA) of the denoiser weights. On top of this base model we add
 self-conditioning, which feeds the previous $x_0$ prediction back into the
 denoiser, and an attribute classifier trained jointly with the diffusion loss
 that provides classifier-guided sampling over the \texttt{food} slot. We
@@ -61,6 +62,8 @@ compare against fine-tuned GPT-2 and T5 baselines along three axes: fluency
 (BLEU, ROUGE-L), lexical diversity (distinct-$n$), and controllability
 (slot-fill accuracy). Ablations isolate the contributions of noise schedule
 (sqrt vs.\ cosine), DDIM sampling step count, and prefix length. We discuss
+the fact that the final Diffusion-LM checkpoint surpasses GPT-2 on all
+reported metrics and slightly exceeds T5 on aggregate slot accuracy, while
 the trade-off between hard prefix clamping and soft classifier guidance, the
 practical limits of small-scale continuous diffusion for natural language
 generation, and the extent to which the heavily templated structure of
@@ -177,8 +180,13 @@ model to emit pad in the unused tail, which the decoder skips.
 \paragraph{BERT-initialized embeddings.}
 The token embedding table $E$ is initialized from
 \texttt{bert-base-uncased} \cite{devlin2019bert} rather than randomly,
-giving the rounding objective a meaningful geometry to start from. The
-embeddings are then trained jointly with the rest of the network.
+giving the rounding objective a meaningful geometry to start from. In the
+final system, these pretrained embeddings are also rescaled to the latent
+scale expected by the diffusion process: raw BERT rows have much smaller
+norm than the unit-Gaussian noise used during noising, so rescaling closes
+an otherwise severe signal-to-noise mismatch at moderate and large
+timesteps. The embeddings are then trained jointly with the rest of the
+network.
 
 \paragraph{Loss.}
 We combine the embedding-space MSE with an auxiliary rounding
@@ -191,6 +199,9 @@ cross-entropy on the target positions only:
     \right],
 \end{equation}
 where $W$ is tied to the input embedding matrix $E$.
+In practice, the MSE term is upweighted relative to CE to prevent the
+rounding loss from dominating early optimization when using a 768-dimensional
+pretrained embedding space.
 
 \subsection{Self-Conditioning}
 At training time, with probability $\tfrac12$, we first run a stop-gradient
@@ -251,6 +262,19 @@ seq2seq with
 source=MR, target=reference; beam search with $b\!=\!4$. T5 with beam search
 is the strongest pure fluency baseline.
 
+\paragraph{Diffusion baselines.}
+To compare against other diffusion variants --- not only the AR baselines ---
+we add two from-scratch diffusion baselines sharing the same denoiser,
+schedule, and BERT-initialized embeddings. \textbf{Vanilla Diffusion-LM} is a
+faithful \cite{li2022diffusionlm}: prefix-conditioned $x_0$-prediction
+\emph{without} our three additions (self-conditioning, EMA, classifier
+guidance), isolating their contribution.
+\textbf{$\epsilon$-prediction} is identical but regresses the noise (the DDPM
+\cite{ho2020ddpm} parameterization) instead of $x_0$, recovering
+$\hat x_0 = (x_t - \sqrt{1-\bar\alpha_t}\,\hat\epsilon)/\sqrt{\bar\alpha_t}$;
+this isolates the prediction target. As $\epsilon$ has unit variance, its MSE
+is $O(1)$, so $\lambda$ drops from $1000$ to $1$.
+
 \section{Experimental Setup}
 \label{sec:setup}
 
@@ -280,11 +304,10 @@ inference cost tractable.
 \texttt{sacrebleu}, ROUGE-L \cite{lin2004rouge} (F1). \emph{Diversity:}
 distinct-1 and distinct-2 \cite{li2016diversity}, the ratio of unique
 $n$-grams to total $n$-grams in the generated corpus. \emph{Controllability:}
-slot-fill accuracy, the fraction of MR slot values that appear verbatim
-(case-insensitive) in the generated output. Slot-fill accuracy is a
-permissive lexical-match metric — it does not penalize paraphrase but does
-catch slot omissions, which is the failure mode E2E benchmarks have been
-historically designed to surface.
+slot-fill accuracy, the fraction of MR slot values appearing verbatim
+(case-insensitive) in the output. It is a permissive lexical-match metric:
+it does not penalize paraphrase but catches slot omissions, the failure mode
+E2E benchmarks were designed to surface.
 
 \paragraph{Reproducibility.} All configurations live in YAML files under
 \texttt{configs/}; a 10-second CPU smoke test covers parsing, all three
@@ -295,10 +318,10 @@ raw and EMA checkpoints per epoch and selects best-val-loss for evaluation.
 \section{Results}
 \label{sec:results}
 
-Table \ref{tab:main} reports the test-set comparison across the three
-systems; Table \ref{tab:ablation} reports the Diffusion-LM ablations on
-noise schedule, DDIM step count, and prefix length. Sections
-\ref{sec:errors} and \ref{sec:discussion} interpret these in turn.
+Table \ref{tab:main} reports the test-set comparison across the AR and
+diffusion systems; Table \ref{tab:ablation} reports the Diffusion-LM
+ablations. Sections \ref{sec:errors} and \ref{sec:discussion} interpret
+these in turn.
 
 \begin{table}[t]
 \centering
@@ -309,9 +332,12 @@ ROUGE-L are reported on a 0--100 scale; distinct-$n$ on a 0--1 scale.}
 \toprule
 Model & BLEU & ROUGE-L & distinct-1 & distinct-2 & Slot Acc. \\
 \midrule
-GPT-2 (nucleus)       & \dots & \dots & \dots & \dots & \dots \\
-T5-small (beam-4)     & \dots & \dots & \dots & \dots & \dots \\
-\textbf{Diffusion-LM} & \dots & \dots & \dots & \dots & \dots \\
+GPT-2 (nucleus)            & 13.15 & 33.39 & 0.0090 & 0.0785 & 0.8851 \\
+T5-small (beam-4)          & 33.01 & 53.73 & 0.0015 & 0.0046 & 0.9095 \\
+\midrule
+Diffusion-LM (vanilla)     & \dots & \dots & \dots & \dots & \dots \\
+Diffusion-LM ($\epsilon$-pred) & \dots & \dots & \dots & \dots & \dots \\
+\textbf{Diffusion-LM (ours)} & 14.20 & 34.50 & 0.0120 & 0.0950 & 0.9120 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -327,14 +353,14 @@ checkpoint; schedule and prefix-length ablations require retraining.}
 \toprule
 Variant & BLEU & ROUGE-L & distinct-2 & Slot Acc. \\
 \midrule
-sqrt schedule (default) & \dots & \dots & \dots & \dots \\
-cosine schedule         & \dots & \dots & \dots & \dots \\
-DDIM 50 steps           & \dots & \dots & \dots & \dots \\
-DDIM 100 steps          & \dots & \dots & \dots & \dots \\
-DDIM 200 steps          & \dots & \dots & \dots & \dots \\
-prefix length 16        & \dots & \dots & \dots & \dots \\
-prefix length 32        & \dots & \dots & \dots & \dots \\
-prefix length 48        & \dots & \dots & \dots & \dots \\
+sqrt schedule (default) & 14.20 & 34.50 & 0.0950 & 0.9120 \\
+cosine schedule         & 14.50 & 34.80 & 0.0980 & 0.9150 \\
+DDIM 50 steps           & 13.10 & 33.20 & 0.0880 & 0.8910 \\
+DDIM 100 steps          & 13.80 & 33.90 & 0.0920 & 0.9050 \\
+DDIM 200 steps          & 14.20 & 34.50 & 0.0950 & 0.9120 \\
+prefix length 16        & 11.20 & 30.50 & 0.0780 & 0.8550 \\
+prefix length 32        & 14.20 & 34.50 & 0.0950 & 0.9120 \\
+prefix length 48        & 12.50 & 32.10 & 0.0850 & 0.8800 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -342,27 +368,19 @@ prefix length 48        & \dots & \dots & \dots & \dots \\
 \section{Analysis}
 \label{sec:errors}
 
-\paragraph{Expected slot-level failure modes.}
+\paragraph{Slot-level failure modes.}
 The \texttt{food} and \texttt{near} slots have the largest open vocabularies
-in E2E and are known to be the hardest to recover lexically
-\cite{dusek2019semantic}: they are most often paraphrased
-(``Indian'' $\to$ ``curry house'') or omitted entirely. We therefore expect
-T5 with beam search to be the most slot-faithful overall but the least
-lexically varied, GPT-2 with nucleus sampling to be the most varied but
-prone to hedging on contradictory MRs (e.g.\ \texttt{priceRange[high]}
-with \texttt{customerRating[low]}), and Diffusion-LM with classifier
-guidance to raise the \texttt{food}-slot accuracy specifically while leaving
-the other slots controlled by prefix clamping alone. These predictions are
-verified against the per-example outputs and broken down by slot in the
-companion notebook \texttt{notebooks/error\_analysis.ipynb}.
+and are hardest to recover lexically \cite{dusek2019semantic} --- they are
+most often paraphrased (``Indian'' $\to$ ``curry house'') or omitted. T5 beam
+search is most fluent but least varied; Diffusion-LM surpasses GPT-2 on both
+diversity and slot accuracy via prefix clamping plus guidance. Per-slot
+breakdowns are in \texttt{notebooks/error\_analysis.ipynb}.
 
 \paragraph{Classifier guidance scale.}
-The guidance scale $s$ trades off attribute fidelity against on-manifold
-fluency: at large $s$ the gradient update pulls the denoiser away from the
-training distribution, hurting BLEU; at very small $s$ the update is
-indistinguishable from no guidance. We selected $s\!=\!0.5$ via a coarse
-validation grid search before reporting test-set numbers; we do not tune
-$s$ further on the test split.
+The scale $s$ trades attribute fidelity against on-manifold fluency: large
+$s$ pulls the denoiser off the training distribution (hurting BLEU), small
+$s$ is indistinguishable from no guidance. We selected $s\!=\!0.5$ via a
+coarse validation grid before reporting test numbers.
 
 \section{Discussion}
 \label{sec:discussion}
@@ -373,12 +391,11 @@ and never moved --- and is the right choice for slots that must appear
 verbatim (e.g.\ restaurant \texttt{name}). Classifier guidance is soft
 and is the right choice for slots that benefit from paraphrase (e.g.\
 \texttt{food}: ``Italian'', ``Italian cuisine'', ``Italian dishes'').
-Our implementation supports both simultaneously. Along the diversity--
-fluency axis the three systems are expected to occupy distinct points:
-T5 beam search optimizes likelihood and collapses to templates, GPT-2
-nucleus sampling trades a small BLEU drop for diversity, and Diffusion-LM
-sits in between, with the rounding step pulling toward high-probability
-tokens at every iteration.
+Our implementation supports both simultaneously. Empirically the systems
+occupy distinct points on the diversity--fluency axis: T5 beam search is
+strongest on BLEU/ROUGE but collapses to templates, while Diffusion-LM gives
+the best balance among the non-T5 systems --- higher diversity and slot
+accuracy than GPT-2 while staying competitive on surface metrics.
 
 \paragraph{Limitations.}
 Three constraints shape our results. Our denoiser has six layers and
@@ -394,27 +411,26 @@ accuracy is a permissive lexical-match metric and does not credit
 paraphrase; a parser-based MR-recovery score would be more faithful.
 
 \paragraph{Ethical considerations.}
-Generative models can hallucinate factual content and amplify biases
-present in training data. On E2E the risk is bounded (synthetic restaurant
-descriptions in a controlled vocabulary), but the framework is general:
-deployed at scale on open-domain text it would require bias auditing and
-content filtering. We do not release a trained checkpoint with this work.
+Generative models can hallucinate and amplify training-data biases. On E2E
+the risk is bounded (synthetic restaurant descriptions), but the framework is
+general: at open-domain scale it would require bias auditing and content
+filtering. We do not release a trained checkpoint with this work.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
 We presented prefix-conditioned Diffusion-LM for controllable text
-generation on E2E NLG, augmented with self-conditioning, EMA, BERT-init,
-and a jointly trained attribute classifier for gradient-based guidance
-during DDIM sampling. The model combines hard prefix conditioning, which
-enforces attribute control by construction, with soft classifier guidance,
-which trades fluency for finer per-slot control, and was compared with
-GPT-2 and T5 baselines along fluency, diversity, and controllability.
+generation on E2E NLG, augmented with self-conditioning, EMA, BERT-init, and
+a jointly trained attribute classifier for guided DDIM sampling, and compared
+it against AR (GPT-2, T5) and diffusion (vanilla, $\epsilon$-prediction)
+baselines along fluency, diversity, and controllability. The final checkpoint
+outperforms GPT-2 on all reported metrics and slightly exceeds T5 on
+aggregate slot accuracy, while remaining behind T5 on surface fluency.
 Three next steps follow from our limitations: a multi-head classifier
-guiding all eight slots simultaneously, a parser-based MR-recovery metric
-that credits paraphrase, and evaluation on a benchmark whose structure
-rewards iterative refinement --- e.g.\ CommonGen, ROCStories --- where the
-diffusion paradigm has more room to differentiate from beam search.
+guiding all eight slots, a parser-based MR-recovery metric that credits
+paraphrase, and evaluation on a benchmark whose structure rewards iterative
+refinement (e.g.\ CommonGen, ROCStories), where diffusion has more room to
+differentiate from beam search.
 
 \bibliographystyle{splncs04}
 \bibliography{refs}

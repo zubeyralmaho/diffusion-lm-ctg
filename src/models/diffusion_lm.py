@@ -86,12 +86,19 @@ class DiffusionLM(nn.Module):
         classifier_loss_weight: float = 0.0,
         mse_lambda: float = 1.0,
         pad_token_id: int | None = None,
+        prediction_type: str = "x0",
     ):
         super().__init__()
+        if prediction_type not in ("x0", "eps"):
+            raise ValueError(f"prediction_type must be 'x0' or 'eps', got {prediction_type!r}")
         self.self_conditioning = self_conditioning
         self.classifier_loss_weight = classifier_loss_weight
         self.mse_lambda = mse_lambda
         self.pad_token_id = pad_token_id
+        # "x0": denoiser predicts the clean embedding (Diffusion-LM default).
+        # "eps": denoiser predicts the noise (classic DDPM parameterization);
+        #        x0 is then derived as (x_t - sqrt(1-abar)*eps) / sqrt(abar).
+        self.prediction_type = prediction_type
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         if embedding_init is not None:
             if embedding_init.shape != self.embedding.weight.shape:
@@ -152,6 +159,18 @@ class DiffusionLM(nn.Module):
         h = self.transformer(h, src_key_padding_mask=transformer_pad_mask)
         return self.out_proj(h)
 
+    def _to_x0(self, model_out: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Map the raw denoiser output to a clean-embedding (x0) estimate.
+
+        Under x0-prediction this is the identity. Under eps-prediction the
+        network output is the noise estimate and x0 is recovered by inverting
+        the forward process: x0 = (x_t - sqrt(1-abar_t) * eps) / sqrt(abar_t).
+        """
+        if self.prediction_type == "x0":
+            return model_out
+        ab = self.schedule.alpha_bar.to(x_t.device)[t].view(-1, 1, 1)
+        return (x_t - torch.sqrt((1.0 - ab).clamp_min(1e-6)) * model_out) / torch.sqrt(ab.clamp_min(1e-6))
+
     def predict_guidance_logits(
         self,
         x_t: torch.Tensor,
@@ -208,17 +227,26 @@ class DiffusionLM(nn.Module):
         self_cond = None
         if self.self_conditioning and torch.rand((), device=x0.device) < 0.5:
             with torch.no_grad():
-                self_cond = self.predict_x0(x_t, t, pad_mask=pad_mask)
-                self_cond = noise_m * self_cond + (1.0 - noise_m) * x0
+                sc_out = self.predict_x0(x_t, t, pad_mask=pad_mask)
+                sc_x0 = self._to_x0(sc_out, x_t, t)
+                # The self-conditioning signal is always the x0 estimate,
+                # regardless of parameterization.
+                self_cond = noise_m * sc_x0 + (1.0 - noise_m) * x0
 
-        x0_hat = self.predict_x0(x_t, t, self_cond=self_cond, pad_mask=pad_mask)
+        model_out = self.predict_x0(x_t, t, self_cond=self_cond, pad_mask=pad_mask)
+        x0_hat = self._to_x0(model_out, x_t, t)
 
         # Detach x0 when used as the MSE regression *target* so that the
         # embedding table is not pulled toward x0_hat through the target side
         # (moving-target instability).  Gradients still flow through the INPUT
         # path (q_sample), which is the intended training signal.
-        x0_target = x0.detach()
-        mse = ((x0_hat - x0_target) ** 2 * loss_m).sum() / loss_m.sum().clamp_min(1.0) / x0.size(-1)
+        if self.prediction_type == "eps":
+            # Classic DDPM objective: regress the noise directly. Noise has
+            # unit variance, so this term is O(1) per dim (use mse_lambda ~1).
+            mse = ((model_out - noise.detach()) ** 2 * loss_m).sum() / loss_m.sum().clamp_min(1.0) / x0.size(-1)
+        else:
+            x0_target = x0.detach()
+            mse = ((x0_hat - x0_target) ** 2 * loss_m).sum() / loss_m.sum().clamp_min(1.0) / x0.size(-1)
         logits = self.lm_head(x0_hat)
         ce = F.cross_entropy(
             logits.view(-1, logits.size(-1)),
@@ -305,7 +333,8 @@ class DiffusionLM(nn.Module):
                     x[:, :P] = prefix_emb
 
             t_batch = t.expand(B)
-            x0_hat = self.predict_x0(x, t_batch, self_cond=self_cond, pad_mask=pad_mask)
+            model_out = self.predict_x0(x, t_batch, self_cond=self_cond, pad_mask=pad_mask)
+            x0_hat = self._to_x0(model_out, x, t_batch)
             # Clamp prefix every step so the condition cannot drift.
             if prefix_emb is not None:
                 x0_hat[:, :P] = prefix_emb
